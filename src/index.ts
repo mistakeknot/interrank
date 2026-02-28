@@ -191,7 +191,7 @@ async function main() {
     "snapshot_info",
     {
       description:
-        "Return snapshot metadata and currently configured source (GitHub URL or local file).",
+        "Return snapshot metadata and currently configured source (local file, URL, or GitHub release asset).",
     },
     async () => {
       const state = await store.get();
