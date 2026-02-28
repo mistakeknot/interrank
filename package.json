@@ -1,0 +1,26 @@
+{
+  "name": "interrank",
+  "version": "0.1.0",
+  "description": "Snapshot-backed ranking MCP server for AgMoDB model and benchmark data",
+  "type": "module",
+  "private": false,
+  "main": "src/index.ts",
+  "scripts": {
+    "mcp": "tsx src/index.ts",
+    "build": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "tsx": "^4.21.0",
+    "typescript": "^5.8.2",
+    "vitest": "^4.0.7"
+  }
+}
