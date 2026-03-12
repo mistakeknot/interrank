@@ -9,6 +9,7 @@ import {
   type SnapshotSource,
 } from "./load.js";
 import type { PublicDataSnapshot, SnapshotModel } from "./types.js";
+import { scoreBenchmarks } from "./recommend.js";
 
 const DEFAULT_REFRESH_MS = 5 * 60 * 1000;
 const MAX_LIMIT = 200;
@@ -313,7 +314,9 @@ async function main() {
           return (
             benchmark.key.toLowerCase().includes(q) ||
             benchmark.slug.toLowerCase().includes(q) ||
-            benchmark.name.toLowerCase().includes(q)
+            benchmark.name.toLowerCase().includes(q) ||
+            benchmark.description?.toLowerCase().includes(q) ||
+            benchmark.relevantUseCases.some((uc) => uc.toLowerCase().includes(q))
           );
         });
       }
@@ -342,6 +345,53 @@ async function main() {
           description: benchmark.description,
           strengths: benchmark.strengths,
           caveats: benchmark.caveats,
+          relevantUseCases: benchmark.relevantUseCases,
+          scoreInterpretation: benchmark.scoreInterpretation,
+          contaminationRisk: benchmark.contaminationRisk,
+          freshnessType: benchmark.freshnessType,
+          metadataStatus: benchmark.metadataStatus,
+          maxScore: benchmark.maxScore,
+        })),
+      });
+    }
+  );
+
+  server.registerTool(
+    "recommend_benchmarks",
+    {
+      description:
+        "Given a natural-language task description, return the most relevant benchmarks for evaluating models on that task. Uses keyword matching against benchmark metadata plus domain affinity boosting.",
+      inputSchema: {
+        task: z.string().min(1).describe("Natural-language task description, e.g. 'customer support chatbot' or 'code review agent'."),
+        categories: z.array(z.string()).optional().describe("Optional category filter (e.g. ['coding', 'agents'])."),
+        limit: z.number().int().min(1).max(MAX_LIMIT).optional().describe("Max benchmarks to return (default: 10)."),
+      },
+    },
+    async ({ task, categories, limit }) => {
+      const state = await store.get();
+      let benchmarks = state.snapshot.benchmarks;
+
+      if (categories && categories.length > 0) {
+        const cats = new Set(categories.map((c) => c.trim().toLowerCase()));
+        benchmarks = benchmarks.filter((b) => cats.has(b.category.toLowerCase()));
+      }
+
+      const results = scoreBenchmarks(task, benchmarks, coerceLimit(limit));
+
+      return jsonContent({
+        task,
+        total: results.length,
+        items: results.map((r) => ({
+          key: r.key,
+          slug: r.slug,
+          name: r.name,
+          category: r.category,
+          description: r.description,
+          caveats: r.caveats,
+          relevantUseCases: r.relevantUseCases,
+          contaminationRisk: r.contaminationRisk,
+          score: r.score,
+          matchReason: r.matchReason,
         })),
       });
     }
@@ -463,6 +513,157 @@ async function main() {
           provider: model.providerName,
           value: model.metricValues[resolved.key],
           predicted: model.predictedMetricKeys.includes(resolved.key),
+        })),
+      });
+    }
+  );
+
+  server.registerTool(
+    "compare_models",
+    {
+      description:
+        "Compare 2-10 models side-by-side across benchmarks. Returns a matrix of scores with prediction flags.",
+      inputSchema: {
+        slugs: z.array(z.string().min(1)).min(2).max(10).describe("Model slugs to compare."),
+        benchmarkKeys: z.array(z.string()).optional().describe("Specific benchmark keys to compare on. If omitted, uses all benchmarks with data."),
+        category: z.string().optional().describe("Filter benchmarks by category (e.g. 'coding')."),
+        limit: z.number().int().min(1).max(MAX_LIMIT).optional().describe("Max benchmarks in the matrix."),
+      },
+    },
+    async ({ slugs, benchmarkKeys, category, limit }) => {
+      const state = await store.get();
+
+      const models: SnapshotModel[] = [];
+      const notFound: string[] = [];
+      for (const slug of slugs) {
+        const model = state.indexes.modelsBySlug.get(slug);
+        if (!model) {
+          notFound.push(slug);
+        } else {
+          models.push(model);
+        }
+      }
+      if (notFound.length > 0) {
+        throw new Error(`Models not found: ${notFound.join(", ")}`);
+      }
+
+      let benchmarks = state.snapshot.benchmarks;
+      if (benchmarkKeys && benchmarkKeys.length > 0) {
+        const keySet = new Set(benchmarkKeys);
+        benchmarks = benchmarks.filter((b) => keySet.has(b.key));
+      }
+      if (category) {
+        const c = category.trim().toLowerCase();
+        benchmarks = benchmarks.filter((b) => b.category.toLowerCase() === c);
+      }
+
+      benchmarks = benchmarks.filter((b) =>
+        models.some((m) => {
+          const v = m.metricValues[b.key];
+          return typeof v === "number" && !Number.isNaN(v);
+        })
+      );
+
+      const cappedBenchmarks = benchmarks.slice(0, coerceLimit(limit));
+
+      const modelHeaders = models.map((m) => ({
+        slug: m.slug,
+        name: m.name,
+        provider: m.providerName,
+      }));
+
+      const benchmarkHeaders = cappedBenchmarks.map((b) => ({
+        key: b.key,
+        name: b.name,
+        category: b.category,
+        higherIsBetter: b.higherIsBetter,
+      }));
+
+      const cells = models.map((model) =>
+        cappedBenchmarks.map((benchmark) => ({
+          value: getMetricValue(model, benchmark.key),
+          predicted: model.predictedMetricKeys.includes(benchmark.key),
+        }))
+      );
+
+      const compositeKeys = ["agmobench", "agmobench_reasoning", "agmobench_coding", "agmobench_math", "agmobench_agentic", "agmobench_robustness"];
+      const composites = compositeKeys.map((key) => ({
+        key,
+        values: models.map((model) => getMetricValue(model, key)),
+      }));
+
+      return jsonContent({
+        models: modelHeaders,
+        benchmarks: benchmarkHeaders,
+        cells,
+        composites,
+      });
+    }
+  );
+
+  const DOMAIN_METRIC_KEYS: Record<string, string> = {
+    overall: "agmobench",
+    reasoning: "agmobench_reasoning",
+    coding: "agmobench_coding",
+    math: "agmobench_math",
+    agentic: "agmobench_agentic",
+    robustness: "agmobench_robustness",
+  };
+  const VALID_DOMAINS = Object.keys(DOMAIN_METRIC_KEYS);
+
+  server.registerTool(
+    "domain_leaderboard",
+    {
+      description:
+        "Rank models by AgMoBench domain index (reasoning, coding, math, agentic, robustness, overall). Resolves domain name to metric key automatically.",
+      inputSchema: {
+        domain: z.enum(["overall", "reasoning", "coding", "math", "agentic", "robustness"]).describe("AgMoBench domain to rank by."),
+        provider: z.string().optional().describe("Filter by provider slug or name."),
+        includePredicted: z.boolean().optional().describe("Include BenchPress-predicted cells (default: true)."),
+        limit: z.number().int().min(1).max(MAX_LIMIT).optional(),
+      },
+    },
+    async ({ domain, provider, includePredicted, limit }) => {
+      const state = await store.get();
+      const metricKey = DOMAIN_METRIC_KEYS[domain];
+      const metric = state.indexes.metricsByKey.get(metricKey);
+      if (!metric) {
+        throw new Error(`Domain metric not found: ${metricKey}. Valid domains: ${VALID_DOMAINS.join(", ")}`);
+      }
+
+      let models = state.snapshot.models;
+      if (provider) {
+        const p = provider.trim().toLowerCase();
+        models = models.filter(
+          (model) =>
+            model.providerSlug.toLowerCase() === p ||
+            model.providerName.toLowerCase() === p
+        );
+      }
+
+      let ranked = sortForMetric(models, metric.key, metric.higherIsBetter)
+        .filter((model) => getMetricValue(model, metric.key) != null);
+
+      if (includePredicted === false) {
+        ranked = ranked.filter(
+          (model) => !model.predictedMetricKeys.includes(metric.key)
+        );
+      }
+
+      const capped = ranked.slice(0, coerceLimit(limit));
+
+      return jsonContent({
+        domain,
+        metric: { key: metric.key, label: metric.label, higherIsBetter: metric.higherIsBetter },
+        total: ranked.length,
+        returned: capped.length,
+        items: capped.map((model, index) => ({
+          rank: index + 1,
+          slug: model.slug,
+          name: model.name,
+          provider: model.providerName,
+          value: model.metricValues[metric.key],
+          predicted: model.predictedMetricKeys.includes(metric.key),
         })),
       });
     }
