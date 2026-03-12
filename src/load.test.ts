@@ -60,6 +60,7 @@ const SNAPSHOT: PublicDataSnapshot = {
         blendedPricePerM: 20,
       },
       predictedMetricKeys: [],
+      capabilitySummary: null,
     },
     {
       id: 2,
@@ -76,6 +77,7 @@ const SNAPSHOT: PublicDataSnapshot = {
         blendedPricePerM: 10,
       },
       predictedMetricKeys: ["agmobench"],
+      capabilitySummary: null,
     },
   ],
 };

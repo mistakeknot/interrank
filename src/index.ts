@@ -171,6 +171,7 @@ function modelCard(model: SnapshotModel, metricKey?: string) {
     provider: model.providerName,
     providerSlug: model.providerSlug,
     releaseDate: model.releaseDate,
+    capabilitySummary: model.capabilitySummary,
     metricValue: metricKey ? getMetricValue(model, metricKey) : null,
   };
 }

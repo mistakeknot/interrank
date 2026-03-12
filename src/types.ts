@@ -38,6 +38,7 @@ export type SnapshotModel = {
   outputTokens: number | null;
   metricValues: Record<string, number>;
   predictedMetricKeys: string[];
+  capabilitySummary: string | null;
 };
 
 export type SnapshotMeta = {
