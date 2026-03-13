@@ -1,4 +1,4 @@
-import type { SnapshotBenchmark } from "./types.js";
+import type { SnapshotBenchmark, SnapshotModel } from "./types.js";
 
 export type ScoredBenchmark = SnapshotBenchmark & {
   score: number;
@@ -134,5 +134,124 @@ export function scoreBenchmarks(
   }
 
   scored.sort((a, b) => b.score - a.score);
+  return scored.slice(0, limit);
+}
+
+export type ModelRecommendation = {
+  slug: string;
+  name: string;
+  provider: string;
+  weightedScore: number;
+  confidence: number;
+  matchReason: string;
+};
+
+export type RecommendOptions = {
+  budget?: "low" | "medium" | "high";
+  costMetric?: string;
+  budgetThresholds?: Record<string, number>;
+  provider?: string;
+  limit?: number;
+};
+
+const DEFAULT_BUDGET_THRESHOLDS: Record<string, number> = {
+  low: 1,
+  medium: 10,
+  high: Infinity,
+};
+
+const PREDICTED_DISCOUNT = 0.7;
+const MIN_BENCHMARK_COVERAGE = 2;
+
+/**
+ * Recommend models for a natural-language task.
+ *
+ * 1. Score benchmarks for relevance (reuses scoreBenchmarks)
+ * 2. For each model, compute weighted score across relevant benchmarks
+ * 3. Apply predicted score discount (0.7x for BenchPress-predicted values)
+ * 4. Filter by budget, provider, and minimum benchmark coverage
+ * 5. Return ranked models with confidence and reasoning
+ */
+export function recommendModels(
+  task: string,
+  benchmarks: SnapshotBenchmark[],
+  models: SnapshotModel[],
+  options: RecommendOptions,
+): ModelRecommendation[] {
+  const relevantBenchmarks = scoreBenchmarks(task, benchmarks, benchmarks.length);
+  if (relevantBenchmarks.length === 0) return [];
+
+  const thresholds = options.budgetThresholds ?? DEFAULT_BUDGET_THRESHOLDS;
+  const costMetric = options.costMetric ?? "blendedPricePerM";
+  const limit = options.limit ?? 50;
+
+  // Filter models by provider
+  let candidateModels = models;
+  if (options.provider) {
+    const p = options.provider.trim().toLowerCase();
+    candidateModels = candidateModels.filter(
+      (m) => m.providerName.toLowerCase() === p || m.providerSlug.toLowerCase() === p,
+    );
+  }
+
+  // Filter models by budget (exclude models with unknown cost)
+  if (options.budget) {
+    const maxCost = thresholds[options.budget] ?? Infinity;
+    candidateModels = candidateModels.filter((m) => {
+      const cost = m.metricValues[costMetric];
+      if (typeof cost !== "number" || Number.isNaN(cost)) return false;
+      return cost <= maxCost;
+    });
+  }
+
+  // Score each model across relevant benchmarks
+  const scored: ModelRecommendation[] = [];
+
+  for (const model of candidateModels) {
+    let totalWeightedScore = 0;
+    let totalWeight = 0;
+    let coveredCount = 0;
+    const reasons: string[] = [];
+
+    for (const benchmark of relevantBenchmarks) {
+      const value = model.metricValues[benchmark.key];
+      if (typeof value !== "number" || Number.isNaN(value)) continue;
+
+      coveredCount++;
+      const isPredicted = model.predictedMetricKeys.includes(benchmark.key);
+      const discount = isPredicted ? PREDICTED_DISCOUNT : 1.0;
+      const weight = benchmark.score * discount;
+
+      totalWeightedScore += value * weight;
+      totalWeight += weight;
+
+      if (isPredicted) {
+        reasons.push(`${benchmark.name} (predicted)`);
+      } else {
+        reasons.push(benchmark.name);
+      }
+    }
+
+    if (coveredCount < MIN_BENCHMARK_COVERAGE) continue;
+
+    const confidence = coveredCount / relevantBenchmarks.length;
+    const normalizedScore = totalWeight > 0 ? totalWeightedScore / totalWeight : 0;
+
+    scored.push({
+      slug: model.slug,
+      name: model.name,
+      provider: model.providerName,
+      weightedScore: Math.round(normalizedScore * 100) / 100,
+      confidence: Math.round(confidence * 100) / 100,
+      matchReason: `Scored on: ${reasons.join(", ")}`,
+    });
+  }
+
+  scored.sort((a, b) => {
+    const scoreDiff = b.weightedScore - a.weightedScore;
+    if (scoreDiff !== 0) return scoreDiff;
+    return b.confidence - a.confidence;
+  });
+
   return scored.slice(0, limit);
 }

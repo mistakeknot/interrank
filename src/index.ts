@@ -9,7 +9,7 @@ import {
   type SnapshotSource,
 } from "./load.js";
 import type { PublicDataSnapshot, SnapshotModel } from "./types.js";
-import { scoreBenchmarks } from "./recommend.js";
+import { scoreBenchmarks, recommendModels } from "./recommend.js";
 
 const DEFAULT_REFRESH_MS = 5 * 60 * 1000;
 const MAX_LIMIT = 200;
@@ -164,6 +164,16 @@ function getMetricValue(model: SnapshotModel, metricKey: string): number | null 
   return typeof value === "number" && !Number.isNaN(value) ? value : null;
 }
 
+function filterByProvider(models: SnapshotModel[], provider?: string): SnapshotModel[] {
+  if (!provider) return models;
+  const p = provider.trim().toLowerCase();
+  return models.filter(
+    (model) =>
+      model.providerSlug.toLowerCase() === p ||
+      model.providerName.toLowerCase() === p
+  );
+}
+
 function modelCard(model: SnapshotModel, metricKey?: string) {
   return {
     slug: model.slug,
@@ -186,7 +196,7 @@ async function main() {
 
   const server = new McpServer({
     name: "interrank",
-    version: "0.1.0",
+    version: "0.2.0",
   });
 
   server.registerTool(
@@ -249,14 +259,7 @@ async function main() {
         );
       }
 
-      if (provider) {
-        const p = provider.trim().toLowerCase();
-        models = models.filter(
-          (model) =>
-            model.providerSlug.toLowerCase() === p ||
-            model.providerName.toLowerCase() === p
-        );
-      }
+      models = filterByProvider(models, provider);
 
       const sortKey = metricKey ?? "agmobench";
       const metric = state.indexes.metricsByKey.get(sortKey);
@@ -347,10 +350,10 @@ async function main() {
           strengths: benchmark.strengths,
           caveats: benchmark.caveats,
           relevantUseCases: benchmark.relevantUseCases,
-          scoreInterpretation: benchmark.scoreInterpretation,
-          contaminationRisk: benchmark.contaminationRisk,
-          freshnessType: benchmark.freshnessType,
-          metadataStatus: benchmark.metadataStatus,
+          scoreInterpretation: benchmark.scoreInterpretation ?? "unknown",
+          contaminationRisk: benchmark.contaminationRisk ?? "unknown",
+          freshnessType: benchmark.freshnessType ?? "unknown",
+          metadataStatus: benchmark.metadataStatus ?? "unknown",
           maxScore: benchmark.maxScore,
         })),
       });
@@ -390,10 +393,49 @@ async function main() {
           description: r.description,
           caveats: r.caveats,
           relevantUseCases: r.relevantUseCases,
-          contaminationRisk: r.contaminationRisk,
+          scoreInterpretation: r.scoreInterpretation ?? "unknown",
+          contaminationRisk: r.contaminationRisk ?? "unknown",
+          freshnessType: r.freshnessType ?? "unknown",
+          metadataStatus: r.metadataStatus ?? "unknown",
           score: r.score,
           matchReason: r.matchReason,
         })),
+      });
+    }
+  );
+
+  server.registerTool(
+    "recommend_model",
+    {
+      description:
+        "Given a task description, recommend the best models. Chains benchmark relevance scoring into weighted model ranking with confidence indicators.",
+      inputSchema: {
+        task: z.string().min(1).describe("Natural-language task description, e.g. 'code review agent for Go' or 'customer support chatbot'."),
+        budget: z.enum(["low", "medium", "high"]).optional().describe("Budget constraint. low: <$1/MTok, medium: <$10/MTok, high: unlimited."),
+        provider: z.string().optional().describe("Filter to models from this provider (slug or name)."),
+        limit: z.number().int().min(1).max(50).optional().describe("Max models to return (default: 5)."),
+      },
+    },
+    async ({ task, budget, provider, limit }) => {
+      const state = await store.get();
+
+      const results = recommendModels(
+        task,
+        state.snapshot.benchmarks,
+        state.snapshot.models,
+        {
+          budget,
+          costMetric: "blendedPricePerM",
+          provider,
+          limit: limit ?? 5,
+        },
+      );
+
+      return jsonContent({
+        task,
+        budget: budget ?? null,
+        total: results.length,
+        items: results,
       });
     }
   );
@@ -418,15 +460,7 @@ async function main() {
         throw new Error(`Unknown metric key: ${metricKey}`);
       }
 
-      let models = state.snapshot.models;
-      if (provider) {
-        const p = provider.trim().toLowerCase();
-        models = models.filter(
-          (model) =>
-            model.providerSlug.toLowerCase() === p ||
-            model.providerName.toLowerCase() === p
-        );
-      }
+      let models = filterByProvider(state.snapshot.models, provider);
 
       let ranked = sortForMetric(models, metric.key, metric.higherIsBetter, sortDirection)
         .filter((model) => getMetricValue(model, metric.key) != null);
@@ -478,15 +512,7 @@ async function main() {
         throw new Error(`Unknown benchmark key/slug: ${benchmark}`);
       }
 
-      let models = state.snapshot.models;
-      if (provider) {
-        const p = provider.trim().toLowerCase();
-        models = models.filter(
-          (model) =>
-            model.providerSlug.toLowerCase() === p ||
-            model.providerName.toLowerCase() === p
-        );
-      }
+      let models = filterByProvider(state.snapshot.models, provider);
 
       let ranked = sortForMetric(
         models,
@@ -632,15 +658,7 @@ async function main() {
         throw new Error(`Domain metric not found: ${metricKey}. Valid domains: ${VALID_DOMAINS.join(", ")}`);
       }
 
-      let models = state.snapshot.models;
-      if (provider) {
-        const p = provider.trim().toLowerCase();
-        models = models.filter(
-          (model) =>
-            model.providerSlug.toLowerCase() === p ||
-            model.providerName.toLowerCase() === p
-        );
-      }
+      let models = filterByProvider(state.snapshot.models, provider);
 
       let ranked = sortForMetric(models, metric.key, metric.higherIsBetter)
         .filter((model) => getMetricValue(model, metric.key) != null);
@@ -665,6 +683,95 @@ async function main() {
           provider: model.providerName,
           value: model.metricValues[metric.key],
           predicted: model.predictedMetricKeys.includes(metric.key),
+        })),
+      });
+    }
+  );
+
+  server.registerTool(
+    "cost_leaderboard",
+    {
+      description:
+        "Rank models by cost-efficiency: benchmark performance per dollar. Higher efficiency = better value. Provide exactly one of metricKey or domain (not both, not neither).",
+      inputSchema: {
+        metricKey: z.string().optional().describe("Metric key to rank efficiency for. Required if domain is not provided. Mutually exclusive with domain."),
+        domain: z.enum(["overall", "reasoning", "coding", "math", "agentic", "robustness"]).optional().describe("AgMoBench domain. Required if metricKey is not provided. Mutually exclusive with metricKey."),
+        costMetric: z.string().optional().describe("Cost metric key (default: blendedPricePerM)."),
+        provider: z.string().optional().describe("Filter by provider slug or name."),
+        includePredicted: z.boolean().optional().describe("Include BenchPress-predicted cells (default: true)."),
+        limit: z.number().int().min(1).max(MAX_LIMIT).optional(),
+      },
+    },
+    async ({ metricKey, domain, costMetric, provider, includePredicted, limit }) => {
+      if (!metricKey && !domain) {
+        throw new Error("Exactly one of metricKey or domain is required.");
+      }
+      if (metricKey && domain) {
+        throw new Error("metricKey and domain are mutually exclusive.");
+      }
+
+      const state = await store.get();
+
+      const resolvedMetricKey = domain ? DOMAIN_METRIC_KEYS[domain] : metricKey!;
+      const metric = state.indexes.metricsByKey.get(resolvedMetricKey);
+      if (!metric) {
+        throw new Error(`Unknown metric key: ${resolvedMetricKey}`);
+      }
+
+      const costKey = costMetric ?? "blendedPricePerM";
+      const costMeta = state.indexes.metricsByKey.get(costKey);
+      if (!costMeta) {
+        throw new Error(`Unknown cost metric key: ${costKey}`);
+      }
+
+      let models = filterByProvider(state.snapshot.models, provider);
+
+      if (includePredicted === false) {
+        models = models.filter(
+          (model) => !model.predictedMetricKeys.includes(resolvedMetricKey)
+        );
+      }
+
+      let excludedCount = 0;
+      const withData = models.filter((model) => {
+        const benchmarkValue = getMetricValue(model, resolvedMetricKey);
+        const costValue = getMetricValue(model, costKey);
+        if (benchmarkValue == null || costValue == null || costValue === 0) {
+          excludedCount++;
+          return false;
+        }
+        return true;
+      });
+
+      const ranked = withData.map((model) => {
+        const benchmarkScore = getMetricValue(model, resolvedMetricKey)!;
+        const costValue = getMetricValue(model, costKey)!;
+        const efficiencyRatio = Math.round((benchmarkScore / costValue) * 100) / 100;
+
+        return {
+          slug: model.slug,
+          name: model.name,
+          provider: model.providerName,
+          benchmarkScore: Math.round(benchmarkScore * 100) / 100,
+          costValue: Math.round(costValue * 100) / 100,
+          efficiencyRatio,
+          predicted: model.predictedMetricKeys.includes(resolvedMetricKey),
+        };
+      });
+
+      ranked.sort((a, b) => b.efficiencyRatio - a.efficiencyRatio);
+      const capped = ranked.slice(0, coerceLimit(limit));
+
+      return jsonContent({
+        metric: { key: metric.key, label: metric.label, higherIsBetter: metric.higherIsBetter },
+        costMetric: { key: costMeta.key, label: costMeta.label },
+        domain: domain ?? null,
+        total: ranked.length,
+        returned: capped.length,
+        excludedCount,
+        items: capped.map((item, index) => ({
+          rank: index + 1,
+          ...item,
         })),
       });
     }

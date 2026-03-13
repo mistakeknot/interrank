@@ -101,3 +101,16 @@ describe("snapshot load helpers", () => {
     expect(sorted.map((m) => m.slug)).toEqual(["model-b", "model-a"]);
   });
 });
+
+describe("cost efficiency", () => {
+  it("computes efficiency ratio correctly", () => {
+    // Model A: agmobench=90, blendedPricePerM=20 → efficiency=90/20=4.5
+    // Model B: agmobench=80, blendedPricePerM=10 → efficiency=80/10=8.0
+    // Model B is more cost-efficient
+    const modelA = SNAPSHOT.models.find((m) => m.slug === "model-a")!;
+    const modelB = SNAPSHOT.models.find((m) => m.slug === "model-b")!;
+    const effA = modelA.metricValues["agmobench"] / modelA.metricValues["blendedPricePerM"];
+    const effB = modelB.metricValues["agmobench"] / modelB.metricValues["blendedPricePerM"];
+    expect(effB).toBeGreaterThan(effA);
+  });
+});
