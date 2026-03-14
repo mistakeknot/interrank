@@ -56,9 +56,21 @@ export type SnapshotMeta = {
   };
 };
 
+export type SnapshotModelFamily = {
+  routingName: string;
+  displayName: string;
+  provider: string;
+  primarySlug: string;
+  slugs: string[];
+  aliases: string[];
+  costTier: "budget" | "mid" | "premium";
+  strengths: string[];
+};
+
 export type PublicDataSnapshot = {
   meta: SnapshotMeta;
   metrics: SnapshotMetric[];
   benchmarks: SnapshotBenchmark[];
   models: SnapshotModel[];
+  modelFamilies?: SnapshotModelFamily[];
 };

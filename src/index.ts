@@ -8,7 +8,7 @@ import {
   type SnapshotIndexes,
   type SnapshotSource,
 } from "./load.js";
-import type { PublicDataSnapshot, SnapshotModel } from "./types.js";
+import type { PublicDataSnapshot, SnapshotModel, SnapshotModelFamily } from "./types.js";
 import { scoreBenchmarks, recommendModels } from "./recommend.js";
 
 const DEFAULT_REFRESH_MS = 5 * 60 * 1000;
@@ -777,12 +777,263 @@ async function main() {
     }
   );
 
+  // ── Routing integration tools (v2+ snapshots) ──────────────────────────────
+
+  /**
+   * Resolve a routing-level model name to its AgMoDB model family and primary model data.
+   * This is the bridge between interspect routing (haiku/sonnet/opus) and AgMoDB benchmarks.
+   */
+  server.registerTool(
+    "resolve_routing_name",
+    {
+      description:
+        "Resolve a routing-level model name (e.g. 'opus', 'sonnet', 'haiku', 'gpt-5.3-codex') to its AgMoDB model family, primary model, and benchmark scores. This is the bridge between interspect/Clavain routing and AgMoDB data.",
+      inputSchema: {
+        name: z.string().min(1).describe("Routing name, alias, or slug to resolve (e.g. 'opus', 'claude-sonnet', 'gpt-5.3-codex-spark')."),
+        domains: z.array(z.enum(["overall", "reasoning", "coding", "math", "agentic", "robustness"])).optional().describe("AgMoBench domains to include in the response (default: all)."),
+      },
+    },
+    async ({ name, domains }) => {
+      const state = await store.get();
+      const family = state.indexes.familyByName.get(name.trim().toLowerCase());
+
+      if (!family) {
+        // List available families for discoverability
+        const available = Array.isArray(state.snapshot.modelFamilies)
+          ? state.snapshot.modelFamilies.map((f) => f.routingName)
+          : [];
+        throw new Error(
+          `Unknown routing name: "${name}". ${available.length > 0 ? `Available families: ${available.join(", ")}` : "No model families in snapshot (requires v2+ snapshot)."}`
+        );
+      }
+
+      // Find primary model, fall back to first matching slug
+      let primaryModel = state.indexes.modelsBySlug.get(family.primarySlug);
+      if (!primaryModel) {
+        for (const slug of family.slugs) {
+          primaryModel = state.indexes.modelsBySlug.get(slug);
+          if (primaryModel) break;
+        }
+      }
+
+      // Collect domain scores for the primary model
+      const domainKeys = domains ?? ["overall", "reasoning", "coding", "math", "agentic", "robustness"];
+      const domainScores: Record<string, number | null> = {};
+      if (primaryModel) {
+        for (const domain of domainKeys) {
+          const metricKey = DOMAIN_METRIC_KEYS[domain];
+          if (metricKey) {
+            domainScores[domain] = getMetricValue(primaryModel, metricKey);
+          }
+        }
+      }
+
+      // Collect key metrics
+      const keyMetrics: Record<string, number | null> = {};
+      if (primaryModel) {
+        for (const key of ["blendedPricePerM", "inputPricePerM", "outputPricePerM", "outputTokensPerSec", "ttftSeconds", "contextWindow", "intelligenceIndex", "codingIndex"]) {
+          keyMetrics[key] = getMetricValue(primaryModel, key);
+        }
+      }
+
+      return jsonContent({
+        family: {
+          routingName: family.routingName,
+          displayName: family.displayName,
+          provider: family.provider,
+          primarySlug: family.primarySlug,
+          costTier: family.costTier,
+          strengths: family.strengths,
+          memberSlugs: family.slugs,
+          aliases: family.aliases,
+        },
+        primaryModel: primaryModel ? {
+          slug: primaryModel.slug,
+          name: primaryModel.name,
+          provider: primaryModel.providerName,
+          releaseDate: primaryModel.releaseDate,
+          capabilitySummary: primaryModel.capabilitySummary,
+        } : null,
+        domainScores,
+        keyMetrics,
+        resolved: primaryModel != null,
+      });
+    }
+  );
+
+  /**
+   * Compare routing-tier models side-by-side on domain scores, cost, and speed.
+   * Designed for interspect B2/B3 routing decisions.
+   */
+  server.registerTool(
+    "routing_compare",
+    {
+      description:
+        "Compare routing-tier models (e.g. 'haiku' vs 'sonnet' vs 'opus') on AgMoBench domains, cost, and speed. Designed for routing decisions — shows which tier is best for each domain and the cost/quality trade-off.",
+      inputSchema: {
+        names: z.array(z.string().min(1)).min(2).max(10).describe("Routing names to compare (e.g. ['haiku', 'sonnet', 'opus'])."),
+        domains: z.array(z.enum(["overall", "reasoning", "coding", "math", "agentic", "robustness"])).optional().describe("AgMoBench domains to compare (default: all)."),
+      },
+    },
+    async ({ names, domains }) => {
+      const state = await store.get();
+      const domainKeys = domains ?? ["overall", "reasoning", "coding", "math", "agentic", "robustness"];
+
+      const entries: Array<{
+        routingName: string;
+        family: SnapshotModelFamily | null;
+        model: SnapshotModel | null;
+        domainScores: Record<string, number | null>;
+        cost: { blended: number | null; input: number | null; output: number | null };
+        speed: { tokensPerSec: number | null; ttft: number | null };
+      }> = [];
+
+      for (const name of names) {
+        const family = state.indexes.familyByName.get(name.trim().toLowerCase()) ?? null;
+
+        let model: SnapshotModel | null = null;
+        if (family) {
+          model = state.indexes.modelsBySlug.get(family.primarySlug) ?? null;
+          if (!model) {
+            for (const slug of family.slugs) {
+              model = state.indexes.modelsBySlug.get(slug) ?? null;
+              if (model) break;
+            }
+          }
+        }
+
+        const domainScores: Record<string, number | null> = {};
+        for (const domain of domainKeys) {
+          const metricKey = DOMAIN_METRIC_KEYS[domain];
+          domainScores[domain] = model && metricKey ? getMetricValue(model, metricKey) : null;
+        }
+
+        entries.push({
+          routingName: name,
+          family,
+          model,
+          domainScores,
+          cost: {
+            blended: model ? getMetricValue(model, "blendedPricePerM") : null,
+            input: model ? getMetricValue(model, "inputPricePerM") : null,
+            output: model ? getMetricValue(model, "outputPricePerM") : null,
+          },
+          speed: {
+            tokensPerSec: model ? getMetricValue(model, "outputTokensPerSec") : null,
+            ttft: model ? getMetricValue(model, "ttftSeconds") : null,
+          },
+        });
+      }
+
+      // Determine winner per domain (highest score)
+      const domainWinners: Record<string, string | null> = {};
+      for (const domain of domainKeys) {
+        let bestName: string | null = null;
+        let bestScore = -Infinity;
+        for (const entry of entries) {
+          const score = entry.domainScores[domain];
+          if (score != null && score > bestScore) {
+            bestScore = score;
+            bestName = entry.routingName;
+          }
+        }
+        domainWinners[domain] = bestName;
+      }
+
+      // Determine cheapest (lowest blended price)
+      let cheapest: string | null = null;
+      let cheapestPrice = Infinity;
+      for (const entry of entries) {
+        if (entry.cost.blended != null && entry.cost.blended < cheapestPrice) {
+          cheapestPrice = entry.cost.blended;
+          cheapest = entry.routingName;
+        }
+      }
+
+      // Determine fastest (highest tokens/sec)
+      let fastest: string | null = null;
+      let fastestSpeed = -Infinity;
+      for (const entry of entries) {
+        if (entry.speed.tokensPerSec != null && entry.speed.tokensPerSec > fastestSpeed) {
+          fastestSpeed = entry.speed.tokensPerSec;
+          fastest = entry.routingName;
+        }
+      }
+
+      return jsonContent({
+        tiers: entries.map((e) => ({
+          routingName: e.routingName,
+          displayName: e.family?.displayName ?? e.routingName,
+          provider: e.family?.provider ?? null,
+          costTier: e.family?.costTier ?? null,
+          strengths: e.family?.strengths ?? [],
+          resolved: e.model != null,
+          modelSlug: e.model?.slug ?? null,
+          domainScores: e.domainScores,
+          cost: e.cost,
+          speed: e.speed,
+        })),
+        domainWinners,
+        cheapest,
+        fastest,
+      });
+    }
+  );
+
+  /**
+   * List all available model families (routing names).
+   */
+  server.registerTool(
+    "list_model_families",
+    {
+      description:
+        "List all model families available for routing. Each family maps a routing name (e.g. 'opus') to AgMoDB model slugs with cost tier and domain strengths.",
+      inputSchema: {
+        costTier: z.enum(["budget", "mid", "premium"]).optional().describe("Filter by cost tier."),
+        provider: z.string().optional().describe("Filter by provider."),
+      },
+    },
+    async ({ costTier, provider }) => {
+      const state = await store.get();
+      let families = state.snapshot.modelFamilies ?? [];
+
+      if (costTier) {
+        families = families.filter((f) => f.costTier === costTier);
+      }
+      if (provider) {
+        const p = provider.trim().toLowerCase();
+        families = families.filter((f) => f.provider.toLowerCase() === p);
+      }
+
+      return jsonContent({
+        total: families.length,
+        snapshotVersion: state.snapshot.meta.version,
+        items: families.map((f) => {
+          const primaryModel = state.indexes.modelsBySlug.get(f.primarySlug);
+          return {
+            routingName: f.routingName,
+            displayName: f.displayName,
+            provider: f.provider,
+            primarySlug: f.primarySlug,
+            costTier: f.costTier,
+            strengths: f.strengths,
+            aliases: f.aliases,
+            resolved: primaryModel != null,
+            agmobench: primaryModel ? getMetricValue(primaryModel, "agmobench") : null,
+            price: primaryModel ? getMetricValue(primaryModel, "blendedPricePerM") : null,
+          };
+        }),
+      });
+    }
+  );
+
   const transport = new StdioServerTransport();
   await server.connect(transport);
 
   // Stderr logging only, so stdout remains clean JSON-RPC stream.
+  const familyCount = initial.snapshot.modelFamilies?.length ?? 0;
   console.error(
-    `interrank MCP server started with ${initial.snapshot.models.length} models from ${sourceLabel(source)}`
+    `interrank MCP server started with ${initial.snapshot.models.length} models, ${familyCount} families from ${sourceLabel(source)}`
   );
 }
 

@@ -7,7 +7,7 @@ import type { PublicDataSnapshot } from "./types.js";
 
 const SNAPSHOT: PublicDataSnapshot = {
   meta: {
-    version: 1,
+    version: 2,
     generatedAt: "2026-02-27T00:00:00.000Z",
     sourceRepo: "mistakeknot/agmodb",
     sourceCommit: "abc123",
@@ -80,6 +80,28 @@ const SNAPSHOT: PublicDataSnapshot = {
       capabilitySummary: null,
     },
   ],
+  modelFamilies: [
+    {
+      routingName: "tier-a",
+      displayName: "Tier A (premium)",
+      provider: "openai",
+      primarySlug: "model-a",
+      slugs: ["model-a"],
+      aliases: ["premium", "best"],
+      costTier: "premium",
+      strengths: ["reasoning", "coding"],
+    },
+    {
+      routingName: "tier-b",
+      displayName: "Tier B (budget)",
+      provider: "openai",
+      primarySlug: "model-b",
+      slugs: ["model-b"],
+      aliases: ["budget", "cheap"],
+      costTier: "budget",
+      strengths: ["coding"],
+    },
+  ],
 };
 
 describe("snapshot load helpers", () => {
@@ -99,6 +121,47 @@ describe("snapshot load helpers", () => {
   it("sorts asc for lower-is-better metrics", () => {
     const sorted = sortForMetric(SNAPSHOT.models, "blendedPricePerM", false);
     expect(sorted.map((m) => m.slug)).toEqual(["model-b", "model-a"]);
+  });
+});
+
+describe("model family index", () => {
+  it("resolves routing names to families", () => {
+    const indexes = buildSnapshotIndexes(SNAPSHOT);
+    const family = indexes.familyByName.get("tier-a");
+    expect(family).toBeDefined();
+    expect(family!.primarySlug).toBe("model-a");
+    expect(family!.costTier).toBe("premium");
+  });
+
+  it("resolves aliases to families", () => {
+    const indexes = buildSnapshotIndexes(SNAPSHOT);
+    expect(indexes.familyByName.get("premium")?.routingName).toBe("tier-a");
+    expect(indexes.familyByName.get("budget")?.routingName).toBe("tier-b");
+    expect(indexes.familyByName.get("best")?.routingName).toBe("tier-a");
+    expect(indexes.familyByName.get("cheap")?.routingName).toBe("tier-b");
+  });
+
+  it("resolves slugs to families", () => {
+    const indexes = buildSnapshotIndexes(SNAPSHOT);
+    expect(indexes.familyByName.get("model-a")?.routingName).toBe("tier-a");
+    expect(indexes.familyByName.get("model-b")?.routingName).toBe("tier-b");
+  });
+
+  it("stores all keys as lowercase for case-insensitive lookup", () => {
+    const indexes = buildSnapshotIndexes(SNAPSHOT);
+    // All keys in the index are lowercased — callers should lowercase before get()
+    for (const key of indexes.familyByName.keys()) {
+      expect(key).toBe(key.toLowerCase());
+    }
+    // Direct lowercase lookup works
+    expect(indexes.familyByName.get("tier-a")?.routingName).toBe("tier-a");
+    expect(indexes.familyByName.get("premium")?.routingName).toBe("tier-a");
+  });
+
+  it("returns empty map for v1 snapshots without families", () => {
+    const v1Snapshot = { ...SNAPSHOT, modelFamilies: undefined };
+    const indexes = buildSnapshotIndexes(v1Snapshot);
+    expect(indexes.familyByName.size).toBe(0);
   });
 });
 

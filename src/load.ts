@@ -3,6 +3,7 @@ import { gunzipSync } from "node:zlib";
 import type {
   PublicDataSnapshot,
   SnapshotModel,
+  SnapshotModelFamily,
 } from "./types.js";
 
 const GZIP_MAGIC_0 = 0x1f;
@@ -25,6 +26,8 @@ export type SnapshotIndexes = {
   metricsByKey: Map<string, { key: string; label: string; higherIsBetter: boolean }>;
   benchmarksByKey: Map<string, { key: string; slug: string; name: string; higherIsBetter: boolean }>;
   benchmarksBySlug: Map<string, { key: string; slug: string; name: string; higherIsBetter: boolean }>;
+  /** Resolve routing names, aliases, and slugs to model families (v2+ snapshots only) */
+  familyByName: Map<string, SnapshotModelFamily>;
 };
 
 function maybeDecompress(buffer: Buffer): string {
@@ -155,11 +158,31 @@ export function buildSnapshotIndexes(snapshot: PublicDataSnapshot): SnapshotInde
     benchmarksBySlug.set(benchmark.slug, value);
   }
 
+  // Build family index from v2+ snapshots
+  const familyByName = new Map<string, SnapshotModelFamily>();
+  if (Array.isArray(snapshot.modelFamilies)) {
+    for (const family of snapshot.modelFamilies) {
+      // Index by routing name (primary lookup)
+      familyByName.set(family.routingName.toLowerCase(), family);
+      // Index by aliases
+      for (const alias of family.aliases) {
+        familyByName.set(alias.toLowerCase(), family);
+      }
+      // Index by member slugs (so a full slug also resolves)
+      for (const slug of family.slugs) {
+        if (!familyByName.has(slug.toLowerCase())) {
+          familyByName.set(slug.toLowerCase(), family);
+        }
+      }
+    }
+  }
+
   return {
     modelsBySlug,
     metricsByKey,
     benchmarksByKey,
     benchmarksBySlug,
+    familyByName,
   };
 }
 
