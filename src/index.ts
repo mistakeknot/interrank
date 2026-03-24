@@ -320,7 +320,7 @@ async function main() {
             benchmark.slug.toLowerCase().includes(q) ||
             benchmark.name.toLowerCase().includes(q) ||
             benchmark.description?.toLowerCase().includes(q) ||
-            benchmark.relevantUseCases.some((uc) => uc.toLowerCase().includes(q))
+            (benchmark.relevantUseCases ?? []).some((uc) => uc.toLowerCase().includes(q))
           );
         });
       }

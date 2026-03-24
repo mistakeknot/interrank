@@ -87,7 +87,7 @@ export function scoreBenchmarks(
     const reasons: string[] = [];
 
     // Match against relevantUseCases
-    for (const useCase of benchmark.relevantUseCases) {
+    for (const useCase of benchmark.relevantUseCases ?? []) {
       const matches = fieldMatches(tokens, useCase);
       if (matches.length > 0) {
         score += matches.length * WEIGHT_USE_CASE;
