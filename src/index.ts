@@ -25,38 +25,48 @@ type SnapshotState = {
 
 class SnapshotStore {
   private state: SnapshotState | null = null;
+  private inflight: Promise<SnapshotState> | null = null;
 
   constructor(
     private readonly source: SnapshotSource,
     private readonly refreshMs: number,
+    private readonly label: string,
   ) {}
 
   async get(): Promise<SnapshotState> {
-    if (!this.state) {
-      this.state = await this.loadFresh();
+    if (this.state && Date.now() - this.state.loadedAt <= this.refreshMs) {
       return this.state;
     }
-
-    if (Date.now() - this.state.loadedAt > this.refreshMs) {
-      this.state = await this.loadFresh();
+    // Coalesce concurrent callers onto a single in-flight load so we don't
+    // double-fetch the snapshot when a background prefetch races a tool call.
+    if (!this.inflight) {
+      this.inflight = this.loadFresh().finally(() => {
+        this.inflight = null;
+      });
     }
-
-    return this.state;
+    return this.inflight;
   }
 
   async refresh(): Promise<SnapshotState> {
-    this.state = await this.loadFresh();
-    return this.state;
+    this.inflight = this.loadFresh().finally(() => {
+      this.inflight = null;
+    });
+    return this.inflight;
   }
 
   private async loadFresh(): Promise<SnapshotState> {
+    const wasFirstLoad = this.state === null;
     const snapshot = await loadSnapshot(this.source);
     const indexes = buildSnapshotIndexes(snapshot);
-    return {
-      snapshot,
-      indexes,
-      loadedAt: Date.now(),
-    };
+    const next: SnapshotState = { snapshot, indexes, loadedAt: Date.now() };
+    this.state = next;
+    if (wasFirstLoad) {
+      const familyCount = snapshot.modelFamilies?.length ?? 0;
+      console.error(
+        `interrank snapshot loaded: ${snapshot.models.length} models, ${familyCount} families from ${this.label}`
+      );
+    }
+    return next;
   }
 }
 
@@ -191,8 +201,7 @@ async function main() {
   const source = resolveSourceFromArgs(argv);
   const refreshMs = resolveRefreshMs(argv);
 
-  const store = new SnapshotStore(source, refreshMs);
-  const initial = await store.get();
+  const store = new SnapshotStore(source, refreshMs, sourceLabel(source));
 
   const server = new McpServer({
     name: "interrank",
@@ -1031,10 +1040,15 @@ async function main() {
   await server.connect(transport);
 
   // Stderr logging only, so stdout remains clean JSON-RPC stream.
-  const familyCount = initial.snapshot.modelFamilies?.length ?? 0;
-  console.error(
-    `interrank MCP server started with ${initial.snapshot.models.length} models, ${familyCount} families from ${sourceLabel(source)}`
-  );
+  // initialize returns without blocking on the 734-model snapshot load (700-900ms).
+  // Prefetch in the background so the first tool call usually hits a primed cache;
+  // SnapshotStore coalesces any overlap with that first call onto one fetch.
+  console.error(`interrank MCP server started — source: ${sourceLabel(source)}`);
+  store.get().catch((err) => {
+    console.error(
+      `interrank snapshot prefetch failed (will retry on first tool call): ${err instanceof Error ? err.message : String(err)}`
+    );
+  });
 }
 
 main().catch((error) => {
