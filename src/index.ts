@@ -1083,6 +1083,18 @@ async function main() {
               capabilitySummary: primaryModel.capabilitySummary,
             }
           : null,
+        // Explicit variant disambiguation so routing is deterministic for the
+        // caller. `posture` is the reasoning posture of the resolved model;
+        // `requested` echoes the caller's explicit intent (null if none);
+        // `fellBackToPrimary` flags when a requested variant wasn't available;
+        // `effort` carries any effort tier ("high" from "gpt-5 high").
+        variant: {
+          resolvedSlug: resolution.resolvedSlug,
+          posture: resolution.variant,
+          requested: resolution.requestedVariant,
+          fellBackToPrimary: resolution.fellBackToPrimary,
+          effort: resolution.effort,
+        },
         domainScores,
         keyMetrics,
         resolved: primaryModel != null,
