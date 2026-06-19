@@ -67,6 +67,27 @@ export function classifySlugVariant(slug: string): ResolvedVariant {
   return "base";
 }
 
+/**
+ * Variant posture of a slug *in the context of its family's other slugs*.
+ *
+ * Providers disagree on how the reasoning variant is named. DeepSeek/Gemini/
+ * Grok mark the reasoning slug (`…-reasoning`) and leave the base unmarked.
+ * Anthropic inverts this: the reasoning variant is unmarked (`claude-opus-4-7`)
+ * and the *non-reasoning* sibling carries the marker. So an unmarked slug whose
+ * `"{slug}-non-reasoning"` sibling exists in the family is, by contrast, the
+ * reasoning variant. Self-name classification (`classifySlugVariant`) can't see
+ * that — it needs the sibling set.
+ */
+export function effectiveVariant(
+  slug: string,
+  slugSet: Set<string>,
+): ResolvedVariant {
+  const own = classifySlugVariant(slug);
+  if (own !== "base") return own;
+  if (slugSet.has(`${slug.toLowerCase()}-non-reasoning`)) return "reasoning";
+  return "base";
+}
+
 const NON_REASONING_RE = /\b(non[-\s]?reasoning|non[-\s]?thinking)\b/;
 const REASONING_RE = /\b(reasoning|thinking)\b/;
 
