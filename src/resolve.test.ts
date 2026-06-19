@@ -322,11 +322,24 @@ const SCENARIOS: Scenario[] = [
     requestedVariant: "reasoning",
   },
   {
-    label:
-      "reasoning requested but family has no reasoning slug → fallback flagged",
+    // GPT-5.2 reasons by default; gpt-5-2-non-reasoning is the explicit
+    // opt-out, so gpt-5-2 is correctly inferred as the reasoning variant.
+    label: "reasoning-by-default family infers the unmarked slug as reasoning",
     input: "gpt-5.2 reasoning",
     routingName: "gpt-5.2",
     resolvedSlug: "gpt-5-2",
+    variant: "reasoning",
+    requestedVariant: "reasoning",
+    fellBackToPrimary: false,
+  },
+  {
+    // gpt-5 family has no reasoning slug and no -non-reasoning sibling, so
+    // a reasoning request genuinely falls back to the primary, flagged.
+    label:
+      "reasoning requested but family has no reasoning slug → fallback flagged",
+    input: "gpt-5 reasoning",
+    routingName: "gpt-5",
+    resolvedSlug: "gpt-5",
     variant: "base",
     requestedVariant: "reasoning",
     fellBackToPrimary: true,
