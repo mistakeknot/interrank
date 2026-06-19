@@ -56,6 +56,28 @@ unit test.
 
 **Streak after fix:** restarted from 0.
 
+## Failure 4 — requestedVariant conflated resolved posture with caller intent
+
+**Input:** `deepseek-v3-2-speciale` (exact slug)
+
+**Expected:** `requestedVariant: null` — Speciale is a distinct model name, not a
+reasoning toggle, so the caller expressed no reasoning-posture intent.
+**Got:** `requestedVariant: "base"`.
+
+**Root cause — in the code.** The exact-match path set
+`requestedVariant: matchedSlug ? variant : null`. For a base-posture slug that
+made `requestedVariant: "base"`, claiming the caller "asked for the base
+variant" when they merely named a specific model. `requestedVariant` should
+reflect *reasoning-posture intent*, which a base slug doesn't carry.
+
+**Fix.** `requestedVariant: matchedSlug && variant !== "base" ? variant : null`.
+Reasoning / non-reasoning exact slugs still report their posture; base-posture
+slugs report null.
+
+**Coverage added.** Scenario `distinct-model trailing word (Speciale)…`.
+
+**Streak after fix:** restarted from 0.
+
 ## Failure 2 — stale test oracle: GPT-5.2 reasons by default
 
 **Input:** `gpt-5.2 reasoning`
