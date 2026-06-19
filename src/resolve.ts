@@ -146,6 +146,37 @@ export function parseVariantQualifier(name: string): {
   return { base: s, variant: null };
 }
 
+const EFFORT_TIERS: ResolvedEffort[] = [
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+];
+const EFFORT_RE = new RegExp(`\\b(${EFFORT_TIERS.join("|")})\\b`);
+
+/**
+ * Strip a trailing effort-tier qualifier off a (already variant-stripped,
+ * lowercased, paren-free) name. Returns the cleaned base and the effort, or
+ * effort=null when none is present. Routing agents send "gpt-5 high".
+ */
+export function stripEffortQualifier(name: string): {
+  base: string;
+  effort: ResolvedEffort | null;
+} {
+  const match = name.match(EFFORT_RE);
+  if (!match) return { base: name.trim(), effort: null };
+  const effort = match[1] as ResolvedEffort;
+  const base = name
+    .replace(EFFORT_RE, " ")
+    .replace(/\s+/g, " ")
+    .replace(/[-\s]+$/, "")
+    .replace(/^[-\s]+/, "")
+    .trim();
+  return { base, effort };
+}
+
 /** Lowercased slug set for a family, for sibling lookups. */
 function slugSetFor(family: SnapshotModelFamily): Set<string> {
   return new Set(family.slugs.map((s) => s.toLowerCase()));
