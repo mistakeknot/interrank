@@ -1,0 +1,183 @@
+/**
+ * Routing-name resolution with explicit variant disambiguation.
+ *
+ * Hermes (the routing-agent persona) calls resolve_routing_name to translate
+ * a model identifier into AgMoDB's canonical family/slug. The fragility this
+ * module fixes: variant suffixes are inconsistent across providers — Anthropic
+ * says "(Thinking)", everyone else says "(Reasoning)" — and the old resolver
+ * did pure exact-match, so "opus reasoning" failed and a bare "opus" silently
+ * dropped any variant intent. There was also no way for the agent to tell
+ * which variant it actually got.
+ *
+ * This resolver:
+ *   1. Normalizes the query (case, parens, "thinking" ≡ "reasoning").
+ *   2. Splits an explicit variant qualifier off the routing name.
+ *   3. Resolves the base family, then picks the slug matching the requested
+ *      variant — falling back to the family primary if that variant isn't
+ *      present, with the fallback flagged.
+ *   4. Returns an explicit `variant` field so routing is deterministic.
+ *
+ * Tracks agmodb-dhu.2. The full editorial variant glossary lives in agmodb
+ * (src/data/variant-glossary.ts) for the web UI; this is the focused
+ * routing-relevant subset. A future snapshot revision could carry canonical
+ * variant tags per slug so both sides share one source of truth.
+ */
+import type { SnapshotModelFamily } from "./types.js";
+import type { SnapshotIndexes } from "./load.js";
+
+/** Reasoning posture of a model variant, as far as routing cares. */
+export type ResolvedVariant = "reasoning" | "non-reasoning" | "base";
+
+export type RoutingResolution = {
+  family: SnapshotModelFamily;
+  /** The specific slug chosen for this resolution. */
+  resolvedSlug: string;
+  /** Reasoning posture of the resolved slug. */
+  variant: ResolvedVariant;
+  /** The variant the caller explicitly asked for, or null if unqualified. */
+  requestedVariant: ResolvedVariant | null;
+  /**
+   * True when the caller asked for a variant the family doesn't carry, so we
+   * fell back to the primary slug. Lets the agent know the variant intent
+   * was not honored exactly.
+   */
+  fellBackToPrimary: boolean;
+};
+
+/**
+ * Classify a slug's reasoning posture from its naming convention.
+ *
+ * Order matters: "-non-reasoning" contains "reasoning" as a substring, so the
+ * non-reasoning check must come first. "-thinking" (Anthropic) is treated as
+ * equivalent to "-reasoning".
+ *
+ * NOTE: a slug with no marker is "base" — but for some families the unmarked
+ * slug IS the reasoning variant (e.g. claude-opus-4-7, whose sibling is
+ * claude-opus-4-7-non-reasoning). That ambiguity is handled at resolution
+ * time, not here, because it requires sibling context.
+ */
+export function classifySlugVariant(slug: string): ResolvedVariant {
+  const s = slug.toLowerCase();
+  if (s.includes("non-reasoning") || s.includes("non-thinking")) {
+    return "non-reasoning";
+  }
+  if (s.includes("reasoning") || s.includes("thinking")) {
+    return "reasoning";
+  }
+  return "base";
+}
+
+const NON_REASONING_RE = /\b(non[-\s]?reasoning|non[-\s]?thinking)\b/;
+const REASONING_RE = /\b(reasoning|thinking)\b/;
+
+/**
+ * Split a routing query into its base name and an explicit variant qualifier.
+ *
+ * Handles "opus reasoning", "opus (reasoning)", "opus thinking",
+ * "gpt-5 non-reasoning". Returns variant=null when no qualifier is present.
+ * The base is cleaned of trailing separators so it can be looked up directly.
+ */
+export function parseVariantQualifier(name: string): {
+  base: string;
+  variant: ResolvedVariant | null;
+} {
+  // Normalize parens and whitespace: "opus (reasoning)" → "opus reasoning".
+  const s = name
+    .trim()
+    .toLowerCase()
+    .replace(/[()]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const cleanup = (base: string): string =>
+    base
+      .replace(/[-\s]+$/, "")
+      .replace(/^[-\s]+/, "")
+      .trim();
+
+  if (NON_REASONING_RE.test(s)) {
+    return {
+      base: cleanup(s.replace(NON_REASONING_RE, " ")),
+      variant: "non-reasoning",
+    };
+  }
+  if (REASONING_RE.test(s)) {
+    return {
+      base: cleanup(s.replace(REASONING_RE, " ")),
+      variant: "reasoning",
+    };
+  }
+  return { base: s, variant: null };
+}
+
+/**
+ * Pick the slug in a family matching the requested reasoning posture.
+ * Returns null when the family carries no slug of that posture.
+ */
+function pickVariantSlug(
+  family: SnapshotModelFamily,
+  variant: ResolvedVariant,
+): string | null {
+  for (const slug of family.slugs) {
+    if (classifySlugVariant(slug) === variant) return slug;
+  }
+  return null;
+}
+
+/**
+ * Resolve a routing-level model name to a family + specific slug + variant.
+ * Returns null when the name resolves to no known family.
+ */
+export function resolveRoutingName(
+  name: string,
+  indexes: SnapshotIndexes,
+): RoutingResolution | null {
+  const normalized = name.trim().toLowerCase();
+
+  // 1. Exact match — a routingName, alias, or full slug.
+  const direct = indexes.familyByName.get(normalized);
+  if (direct) {
+    // If the matched key was itself a variant-bearing slug, honor that slug
+    // and its posture. Otherwise use the family primary.
+    const matchedSlug = direct.slugs.find(
+      (s) => s.toLowerCase() === normalized,
+    );
+    const resolvedSlug = matchedSlug ?? direct.primarySlug;
+    const variant = classifySlugVariant(resolvedSlug);
+    return {
+      family: direct,
+      resolvedSlug,
+      variant,
+      requestedVariant: matchedSlug ? variant : null,
+      fellBackToPrimary: false,
+    };
+  }
+
+  // 2. No exact match — try splitting a variant qualifier off the name.
+  const { base, variant } = parseVariantQualifier(name);
+  if (variant && base) {
+    const family = indexes.familyByName.get(base);
+    if (family) {
+      const slug = pickVariantSlug(family, variant);
+      if (slug) {
+        return {
+          family,
+          resolvedSlug: slug,
+          variant,
+          requestedVariant: variant,
+          fellBackToPrimary: false,
+        };
+      }
+      // Requested variant not present — fall back to primary, flag it.
+      return {
+        family,
+        resolvedSlug: family.primarySlug,
+        variant: classifySlugVariant(family.primarySlug),
+        requestedVariant: variant,
+        fellBackToPrimary: true,
+      };
+    }
+  }
+
+  return null;
+}
