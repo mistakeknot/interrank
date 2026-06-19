@@ -131,16 +131,24 @@ export function parseVariantQualifier(name: string): {
   return { base: s, variant: null };
 }
 
+/** Lowercased slug set for a family, for sibling lookups. */
+function slugSetFor(family: SnapshotModelFamily): Set<string> {
+  return new Set(family.slugs.map((s) => s.toLowerCase()));
+}
+
 /**
- * Pick the slug in a family matching the requested reasoning posture.
- * Returns null when the family carries no slug of that posture.
+ * Pick the slug in a family matching the requested reasoning posture, using
+ * sibling-aware classification so Anthropic's unmarked reasoning slugs resolve
+ * correctly. Slugs are ordered by recency in the family, so the first match is
+ * the newest variant of that posture.
  */
 function pickVariantSlug(
   family: SnapshotModelFamily,
   variant: ResolvedVariant,
 ): string | null {
+  const slugs = slugSetFor(family);
   for (const slug of family.slugs) {
-    if (classifySlugVariant(slug) === variant) return slug;
+    if (effectiveVariant(slug, slugs) === variant) return slug;
   }
   return null;
 }
