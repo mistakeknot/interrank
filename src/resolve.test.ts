@@ -261,6 +261,7 @@ type Scenario = {
   variant: "reasoning" | "non-reasoning" | "base";
   requestedVariant?: "reasoning" | "non-reasoning" | "base" | null;
   fellBackToPrimary?: boolean;
+  effort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | null;
 };
 
 const SCENARIOS: Scenario[] = [
