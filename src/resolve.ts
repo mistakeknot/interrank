@@ -172,7 +172,7 @@ export function resolveRoutingName(
       (s) => s.toLowerCase() === normalized,
     );
     const resolvedSlug = matchedSlug ?? direct.primarySlug;
-    const variant = classifySlugVariant(resolvedSlug);
+    const variant = effectiveVariant(resolvedSlug, slugSetFor(direct));
     return {
       family: direct,
       resolvedSlug,
