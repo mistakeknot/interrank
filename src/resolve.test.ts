@@ -158,6 +158,33 @@ describe("classifySlugVariant", () => {
   });
 });
 
+describe("effectiveVariant (sibling-aware)", () => {
+  // Regression for Failure 1: Anthropic's reasoning variant is unmarked
+  // (claude-opus-4-7) and the non-reasoning sibling carries the marker.
+  it("treats unmarked-with-non-reasoning-sibling as reasoning", () => {
+    const siblings = new Set([
+      "claude-opus-4-7",
+      "claude-opus-4-7-non-reasoning",
+    ]);
+    expect(effectiveVariant("claude-opus-4-7", siblings)).toBe("reasoning");
+    expect(effectiveVariant("claude-opus-4-7-non-reasoning", siblings)).toBe(
+      "non-reasoning",
+    );
+  });
+
+  it("leaves a truly-unmarked slug (no sibling) as base", () => {
+    const siblings = new Set(["claude-opus-4-6", "claude-opus-4-6-adaptive"]);
+    expect(effectiveVariant("claude-opus-4-6", siblings)).toBe("base");
+  });
+
+  it("respects an explicit marker regardless of siblings", () => {
+    const siblings = new Set(["deepseek-v3-2", "deepseek-v3-2-reasoning"]);
+    expect(effectiveVariant("deepseek-v3-2-reasoning", siblings)).toBe(
+      "reasoning",
+    );
+  });
+});
+
 describe("parseVariantQualifier", () => {
   it("splits a trailing reasoning qualifier", () => {
     expect(parseVariantQualifier("opus reasoning")).toEqual({
