@@ -201,7 +201,7 @@ export function resolveRoutingName(
       return {
         family,
         resolvedSlug: family.primarySlug,
-        variant: classifySlugVariant(family.primarySlug),
+        variant: effectiveVariant(family.primarySlug, slugSetFor(family)),
         requestedVariant: variant,
         fellBackToPrimary: true,
       };
