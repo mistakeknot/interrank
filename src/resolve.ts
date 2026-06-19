@@ -28,6 +28,15 @@ import type { SnapshotIndexes } from "./load.js";
 /** Reasoning posture of a model variant, as far as routing cares. */
 export type ResolvedVariant = "reasoning" | "non-reasoning" | "base";
 
+/** Reasoning-effort tier a caller may append (OpenAI-style). */
+export type ResolvedEffort =
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max";
+
 export type RoutingResolution = {
   family: SnapshotModelFamily;
   /** The specific slug chosen for this resolution. */
@@ -42,6 +51,12 @@ export type RoutingResolution = {
    * was not honored exactly.
    */
   fellBackToPrimary: boolean;
+  /**
+   * Effort tier the caller appended (e.g. "high" from "gpt-5 high"), or null.
+   * Does not change the resolved family/slug in v0 — surfaced so the agent can
+   * forward it to the provider.
+   */
+  effort: ResolvedEffort | null;
 };
 
 /**
