@@ -30,3 +30,25 @@ Thread the family's slug set through `pickVariantSlug` and the resolved
 `claude-opus-4-7`. Unit test `effectiveVariant treats unmarked-with-non-reasoning-sibling as reasoning`.
 
 **Streak after fix:** restarted from 0.
+
+## Failure 2 — stale test oracle: GPT-5.2 reasons by default
+
+**Input:** `gpt-5.2 reasoning`
+
+**Expected (as written):** fall back to primary, `fellBackToPrimary: true`, variant `base`.
+**Got:** `gpt-5-2`, variant `reasoning`, `fellBackToPrimary: false`.
+
+**Root cause — in the test, not the code.** GPT-5.2's family carries
+`gpt-5-2` and `gpt-5-2-non-reasoning`. By the same sibling inference from
+Failure 1, the unmarked `gpt-5-2` IS the reasoning-default variant (OpenAI
+exposes non-reasoning as the explicit opt-out). The resolver correctly
+resolved it; my hand-written expectation was the stale one.
+
+**Fix.** Correct the `gpt-5.2 reasoning` scenario to expect `gpt-5-2` /
+`reasoning` / no fallback. Add a *genuine* fallback scenario — `gpt-5
+reasoning` — where the family (`gpt-5`, `gpt-5-low`, `gpt-5-medium`,
+`gpt-5-minimal`, `gpt-5-codex`) has no reasoning slug and no `-non-reasoning`
+sibling, so falling back to the primary with `fellBackToPrimary: true` is
+the correct, coverage-preserving behavior.
+
+**Streak after fix:** restarted from 0.
