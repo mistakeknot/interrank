@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildSnapshotIndexes } from "./load.js";
 import {
   classifySlugVariant,
+  effectiveVariant,
   parseVariantQualifier,
   resolveRoutingName,
 } from "./resolve.js";
