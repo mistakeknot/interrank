@@ -223,6 +223,31 @@ describe("parseVariantQualifier", () => {
   });
 });
 
+describe("stripEffortQualifier", () => {
+  it("strips a trailing effort tier", () => {
+    expect(stripEffortQualifier("gpt-5 high")).toEqual({
+      base: "gpt-5",
+      effort: "high",
+    });
+    expect(stripEffortQualifier("gpt-5 xhigh")).toEqual({
+      base: "gpt-5",
+      effort: "xhigh",
+    });
+  });
+
+  it("returns null effort when none present", () => {
+    expect(stripEffortQualifier("gpt-5")).toEqual({
+      base: "gpt-5",
+      effort: null,
+    });
+  });
+
+  it("does not treat substrings as effort tiers", () => {
+    // "minimalist" must not match "minimal"; word-boundary anchored.
+    expect(stripEffortQualifier("model-minimalist").effort).toBeNull();
+  });
+});
+
 // ─── Realistic Hermes routing scenarios ────────────────────────────────────
 // Each entry mirrors a routing query Hermes actually sends. The streak runs
 // these in order; a failure documents → fixes → restarts. See
