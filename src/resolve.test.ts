@@ -430,6 +430,17 @@ const SCENARIOS: Scenario[] = [
     resolvedSlug: "gpt-5",
     variant: "base",
     requestedVariant: null,
+    effort: "high",
+  },
+  {
+    label: "reasoning + effort combined",
+    input: "opus reasoning high",
+    routingName: "opus",
+    resolvedSlug: "claude-opus-4-7",
+    variant: "reasoning",
+    requestedVariant: "reasoning",
+    fellBackToPrimary: false,
+    effort: "high",
   },
 ];
 
