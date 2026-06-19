@@ -5,6 +5,7 @@ import {
   effectiveVariant,
   parseVariantQualifier,
   resolveRoutingName,
+  stripEffortQualifier,
 } from "./resolve.js";
 import type { PublicDataSnapshot, SnapshotModelFamily } from "./types.js";
 
