@@ -219,11 +219,15 @@ export function resolveRoutingName(
     );
     const resolvedSlug = matchedSlug ?? direct.primarySlug;
     const variant = effectiveVariant(resolvedSlug, slugSetFor(direct));
+    // requestedVariant reflects reasoning-posture INTENT, not the resolved
+    // posture. A base-posture slug (e.g. "…-speciale", "claude-opus-4-6")
+    // carries no reasoning intent, so it reports null — only reasoning /
+    // non-reasoning slugs report a requested posture.
     return {
       family: direct,
       resolvedSlug,
       variant,
-      requestedVariant: matchedSlug ? variant : null,
+      requestedVariant: matchedSlug && variant !== "base" ? variant : null,
       fellBackToPrimary: false,
       effort: null,
     };
