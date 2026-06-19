@@ -344,6 +344,66 @@ const SCENARIOS: Scenario[] = [
     requestedVariant: "reasoning",
     fellBackToPrimary: true,
   },
+  // ── Adversarial batch: untested dimensions ────────────────────────────
+  {
+    label: "case-insensitive name + variant",
+    input: "Opus Reasoning",
+    routingName: "opus",
+    resolvedSlug: "claude-opus-4-7",
+    variant: "reasoning",
+    requestedVariant: "reasoning",
+  },
+  {
+    label: "alias + variant qualifier",
+    input: "claude-opus reasoning",
+    routingName: "opus",
+    resolvedSlug: "claude-opus-4-7",
+    variant: "reasoning",
+    requestedVariant: "reasoning",
+  },
+  {
+    label: "dotted alias + variant qualifier",
+    input: "claude-opus-4.7 reasoning",
+    routingName: "opus",
+    resolvedSlug: "claude-opus-4-7",
+    variant: "reasoning",
+    requestedVariant: "reasoning",
+  },
+  {
+    label: "extra whitespace is tolerated",
+    input: "   opus    thinking  ",
+    routingName: "opus",
+    resolvedSlug: "claude-opus-4-7",
+    variant: "reasoning",
+    requestedVariant: "reasoning",
+  },
+  {
+    label: "exact non-reasoning slug via direct match",
+    input: "grok-4-20-non-reasoning",
+    routingName: "grok-4",
+    resolvedSlug: "grok-4-20-non-reasoning",
+    variant: "non-reasoning",
+    requestedVariant: "non-reasoning",
+  },
+  {
+    label: "alias resolves to family base",
+    input: "gemini-flash",
+    routingName: "gemini-3-flash",
+    resolvedSlug: "gemini-3-flash",
+    variant: "base",
+    requestedVariant: null,
+  },
+  {
+    // Effort-tier qualifier (high/low/xhigh) — not a reasoning marker, but a
+    // routing agent will send "gpt-5 high". It must resolve the base family,
+    // not 404. (Effort is captured separately; see effort field.)
+    label: "effort qualifier resolves base family",
+    input: "gpt-5 high",
+    routingName: "gpt-5",
+    resolvedSlug: "gpt-5",
+    variant: "base",
+    requestedVariant: null,
+  },
 ];
 
 describe("resolveRoutingName — realistic scenarios (agmodb-dhu.2)", () => {
