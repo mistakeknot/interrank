@@ -31,6 +31,31 @@ Thread the family's slug set through `pickVariantSlug` and the resolved
 
 **Streak after fix:** restarted from 0.
 
+## Failure 3 — effort qualifier 404s
+
+**Input:** `gpt-5 high`
+
+**Expected:** resolve the `gpt-5` base family (effort captured separately).
+**Got:** `null` ("Unknown routing name").
+
+**Root cause.** The resolver only retried after stripping a *reasoning* variant
+qualifier. An effort-tier qualifier (`high`/`low`/`medium`/`minimal`/`xhigh`/
+`max`) left `parseVariantQualifier` with `variant: null`, so step 2's
+`if (variant && base)` guard was never entered and the name fell through to
+`null`. Routing agents routinely send "gpt-5 high".
+
+**Fix.** Add `stripEffortQualifier` and an `effort` field on the resolution.
+Step 2 now strips both reasoning *and* effort qualifiers, and retries the base
+lookup whenever either qualifier was present (not only on a reasoning variant).
+Effort doesn't change the family/slug in v0 — it's surfaced as metadata so the
+agent can pass it through to the provider.
+
+**Coverage added.** Scenario `effort qualifier resolves base family`
+(`gpt-5 high`), plus `reasoning + effort combined` and a `stripEffortQualifier`
+unit test.
+
+**Streak after fix:** restarted from 0.
+
 ## Failure 2 — stale test oracle: GPT-5.2 reasons by default
 
 **Input:** `gpt-5.2 reasoning`
