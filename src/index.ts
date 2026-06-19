@@ -999,9 +999,11 @@ async function main() {
     },
     async ({ name, domains }) => {
       const state = await store.get();
-      const family = state.indexes.familyByName.get(name.trim().toLowerCase());
+      // Variant-aware resolution: handles "opus reasoning", "gpt-5 high",
+      // Anthropic's unmarked-reasoning naming, etc. (agmodb-dhu.2)
+      const resolution = resolveRoutingName(name, state.indexes);
 
-      if (!family) {
+      if (!resolution) {
         // List available families for discoverability
         const available = Array.isArray(state.snapshot.modelFamilies)
           ? state.snapshot.modelFamilies.map((f) => f.routingName)
@@ -1011,8 +1013,13 @@ async function main() {
         );
       }
 
-      // Find primary model, fall back to first matching slug
-      let primaryModel = state.indexes.modelsBySlug.get(family.primarySlug);
+      const family = resolution.family;
+
+      // Use the model the resolver actually selected (the variant-specific
+      // slug), falling back to the family primary then any member slug.
+      let primaryModel =
+        state.indexes.modelsBySlug.get(resolution.resolvedSlug) ??
+        state.indexes.modelsBySlug.get(family.primarySlug);
       if (!primaryModel) {
         for (const slug of family.slugs) {
           primaryModel = state.indexes.modelsBySlug.get(slug);
