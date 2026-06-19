@@ -460,6 +460,9 @@ describe("resolveRoutingName — realistic scenarios (agmodb-dhu.2)", () => {
       if (s.fellBackToPrimary !== undefined) {
         expect(r!.fellBackToPrimary).toBe(s.fellBackToPrimary);
       }
+      if (s.effort !== undefined) {
+        expect(r!.effort).toBe(s.effort);
+      }
     });
   }
 
