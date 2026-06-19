@@ -225,31 +225,49 @@ export function resolveRoutingName(
       variant,
       requestedVariant: matchedSlug ? variant : null,
       fellBackToPrimary: false,
+      effort: null,
     };
   }
 
-  // 2. No exact match — try splitting a variant qualifier off the name.
-  const { base, variant } = parseVariantQualifier(name);
-  if (variant && base) {
+  // 2. No exact match — strip reasoning and/or effort qualifiers and retry.
+  const { base: afterVariant, variant } = parseVariantQualifier(name);
+  const { base, effort } = stripEffortQualifier(afterVariant);
+
+  // Only retry when we actually stripped a qualifier (variant or effort) —
+  // otherwise `base` equals the already-failed exact lookup.
+  if (base && (variant || effort)) {
     const family = indexes.familyByName.get(base);
     if (family) {
-      const slug = pickVariantSlug(family, variant);
-      if (slug) {
+      if (variant) {
+        const slug = pickVariantSlug(family, variant);
+        if (slug) {
+          return {
+            family,
+            resolvedSlug: slug,
+            variant,
+            requestedVariant: variant,
+            fellBackToPrimary: false,
+            effort,
+          };
+        }
+        // Requested variant not present — fall back to primary, flag it.
         return {
           family,
-          resolvedSlug: slug,
-          variant,
+          resolvedSlug: family.primarySlug,
+          variant: effectiveVariant(family.primarySlug, slugSetFor(family)),
           requestedVariant: variant,
-          fellBackToPrimary: false,
+          fellBackToPrimary: true,
+          effort,
         };
       }
-      // Requested variant not present — fall back to primary, flag it.
+      // Effort-only qualifier — resolve the base family, carry the effort.
       return {
         family,
         resolvedSlug: family.primarySlug,
         variant: effectiveVariant(family.primarySlug, slugSetFor(family)),
-        requestedVariant: variant,
-        fellBackToPrimary: true,
+        requestedVariant: null,
+        fellBackToPrimary: false,
+        effort,
       };
     }
   }
