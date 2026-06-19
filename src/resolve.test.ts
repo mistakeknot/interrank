@@ -442,6 +442,52 @@ const SCENARIOS: Scenario[] = [
     fellBackToPrimary: false,
     effort: "high",
   },
+  // ── Final probing batch: confirm streak robustness ────────────────────
+  {
+    label: "all-caps bare name",
+    input: "OPUS",
+    routingName: "opus",
+    resolvedSlug: "claude-opus-4-6",
+    variant: "base",
+    requestedVariant: null,
+    effort: null,
+  },
+  {
+    label: "distinct-model trailing word (Speciale) is not a reasoning toggle",
+    input: "deepseek-v3-2-speciale",
+    routingName: "deepseek-v3.2",
+    resolvedSlug: "deepseek-v3-2-speciale",
+    variant: "base",
+    requestedVariant: null,
+  },
+  {
+    label: "grok dotted alias resolves base",
+    input: "grok-4.1",
+    routingName: "grok-4",
+    resolvedSlug: "grok-4",
+    variant: "base",
+    requestedVariant: null,
+  },
+  {
+    label: "effort on a reasoning-default family keeps reasoning posture",
+    input: "gpt-5.2 medium",
+    routingName: "gpt-5.2",
+    // gpt-5-2 is reasoning-default (gpt-5-2-non-reasoning sibling exists);
+    // an effort-only qualifier resolves the primary, posture inferred.
+    resolvedSlug: "gpt-5-2",
+    variant: "reasoning",
+    requestedVariant: null,
+    effort: "medium",
+  },
+  {
+    label: "non-reasoning + effort combined",
+    input: "grok-4 non-reasoning low",
+    routingName: "grok-4",
+    resolvedSlug: "grok-4-20-non-reasoning",
+    variant: "non-reasoning",
+    requestedVariant: "non-reasoning",
+    effort: "low",
+  },
 ];
 
 describe("resolveRoutingName — realistic scenarios (agmodb-dhu.2)", () => {
