@@ -13,7 +13,14 @@ import type {
   SnapshotModel,
   SnapshotModelFamily,
 } from "./types.js";
-import { scoreBenchmarks, recommendModels } from "./recommend.js";
+import {
+  HERMES_ROUTE_LANES,
+  HERMES_ROUTE_TASKS,
+  recommendHermesAuxiliaryModels,
+  recommendHermesRoute,
+  recommendModels,
+  scoreBenchmarks,
+} from "./recommend.js";
 import { resolveRoutingName } from "./resolve.js";
 
 const DEFAULT_REFRESH_MS = 5 * 60 * 1000;
@@ -1253,6 +1260,127 @@ async function main() {
         domainWinners,
         cheapest,
         fastest,
+      });
+    },
+  );
+
+  const HERMES_ROUTE_CONSTRAINT_SCHEMA = z
+    .object({
+      maxCostPerMtok: z
+        .number()
+        .nonnegative()
+        .optional()
+        .describe("Maximum blended price per million tokens."),
+      maxLatencyMs: z
+        .number()
+        .positive()
+        .optional()
+        .describe("Maximum TTFT latency proxy in milliseconds."),
+      minContextTokens: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe("Minimum required context window."),
+      providerAllowlist: z
+        .array(z.string().min(1))
+        .optional()
+        .describe("Provider slugs/names Hermes is allowed to use."),
+    })
+    .optional();
+
+  server.registerTool(
+    "recommend_hermes_route",
+    {
+      description:
+        "Recommend provider:model routes for a Hermes auxiliary task using task-specific quality, cost, and latency tradeoffs. Returns compact JSON suitable for agent routing.",
+      inputSchema: {
+        task: z
+          .enum(HERMES_ROUTE_TASKS)
+          .describe("Hermes auxiliary task to optimize for."),
+        lane: z
+          .enum(HERMES_ROUTE_LANES)
+          .optional()
+          .describe("Optimization lane: balanced, budget, quality, or fast."),
+        constraints: HERMES_ROUTE_CONSTRAINT_SCHEMA,
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(25)
+          .optional()
+          .describe("Maximum routes to return (default: 5)."),
+      },
+    },
+    async ({ task, lane, constraints, limit }) => {
+      const state = await store.get();
+      const items = recommendHermesRoute(task, state.snapshot.models, {
+        lane: lane ?? "balanced",
+        constraints,
+        limit: limit ?? 5,
+        modelFamilies: state.snapshot.modelFamilies ?? [],
+      });
+
+      return jsonContent({
+        task,
+        lane: lane ?? "balanced",
+        total: items.length,
+        snapshot: {
+          version: state.snapshot.meta.version,
+          generatedAt: state.snapshot.meta.generatedAt,
+          sourceCommit: state.snapshot.meta.sourceCommit,
+        },
+        privacy: {
+          storesTaskContent: false,
+          sendsUserContentToAgMoDB: false,
+        },
+        items,
+      });
+    },
+  );
+
+  server.registerTool(
+    "recommend_hermes_auxiliary_models",
+    {
+      description:
+        "Return route recommendations for all visible Hermes auxiliary model slots (vision, web_extract, compression, skills_hub, approval, mcp, title_gen, curator).",
+      inputSchema: {
+        lane: z
+          .enum(HERMES_ROUTE_LANES)
+          .optional()
+          .describe("Optimization lane for every task: balanced, budget, quality, or fast."),
+        constraints: HERMES_ROUTE_CONSTRAINT_SCHEMA,
+        limitPerTask: z
+          .number()
+          .int()
+          .min(1)
+          .max(10)
+          .optional()
+          .describe("Maximum routes per auxiliary task (default: 3)."),
+      },
+    },
+    async ({ lane, constraints, limitPerTask }) => {
+      const state = await store.get();
+      const assignments = recommendHermesAuxiliaryModels(state.snapshot.models, {
+        lane: lane ?? "balanced",
+        constraints,
+        limitPerTask: limitPerTask ?? 3,
+        modelFamilies: state.snapshot.modelFamilies ?? [],
+      });
+
+      return jsonContent({
+        lane: lane ?? "balanced",
+        tasks: HERMES_ROUTE_TASKS,
+        snapshot: {
+          version: state.snapshot.meta.version,
+          generatedAt: state.snapshot.meta.generatedAt,
+          sourceCommit: state.snapshot.meta.sourceCommit,
+        },
+        privacy: {
+          storesTaskContent: false,
+          sendsUserContentToAgMoDB: false,
+        },
+        assignments,
       });
     },
   );

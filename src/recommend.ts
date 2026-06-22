@@ -255,3 +255,316 @@ export function recommendModels(
 
   return scored.slice(0, limit);
 }
+
+export const HERMES_ROUTE_TASKS = [
+  "vision",
+  "web_extract",
+  "compression",
+  "skills_hub",
+  "approval",
+  "mcp",
+  "title_gen",
+  "curator",
+] as const;
+
+export type HermesRouteTask = (typeof HERMES_ROUTE_TASKS)[number];
+
+export const HERMES_ROUTE_LANES = [
+  "balanced",
+  "budget",
+  "quality",
+  "fast",
+] as const;
+
+export type HermesRouteLane = (typeof HERMES_ROUTE_LANES)[number];
+
+export type HermesRouteConstraints = {
+  maxCostPerMtok?: number;
+  maxLatencyMs?: number;
+  minContextTokens?: number;
+  providerAllowlist?: string[];
+};
+
+export type HermesRouteRecommendation = {
+  task: HermesRouteTask;
+  lane: HermesRouteLane;
+  route_id: string;
+  provider: string;
+  model: string;
+  name: string;
+  canonical_family: string;
+  score: number;
+  expected: {
+    cost_per_mtok: number | null;
+    output_tokens_per_sec: number | null;
+    ttft_ms: number | null;
+    context_tokens: number | null;
+  };
+  evidence: {
+    quality_score: number;
+    cost_score: number;
+    latency_score: number;
+    evidence_grade: "A" | "A-" | "B+" | "B" | "C";
+  };
+  reason: string;
+};
+
+export type RecommendHermesRouteOptions = {
+  lane?: HermesRouteLane;
+  constraints?: HermesRouteConstraints;
+  limit?: number;
+  modelFamilies?: import("./types.js").SnapshotModelFamily[];
+};
+
+export type RecommendHermesAuxiliaryOptions = Omit<
+  RecommendHermesRouteOptions,
+  "limit"
+> & {
+  limitPerTask?: number;
+};
+
+const HERMES_TASK_METRIC_WEIGHTS: Record<HermesRouteTask, Record<string, number>> = {
+  vision: {
+    agmobench: 0.45,
+    intelligenceIndex: 0.25,
+    agmobench_reasoning: 0.2,
+    agmobench_robustness: 0.1,
+  },
+  web_extract: {
+    agmobench_reasoning: 0.35,
+    agmobench: 0.3,
+    intelligenceIndex: 0.2,
+    agmobench_robustness: 0.15,
+  },
+  compression: {
+    agmobench_reasoning: 0.4,
+    agmobench: 0.3,
+    intelligenceIndex: 0.2,
+    agmobench_robustness: 0.1,
+  },
+  skills_hub: {
+    agmobench_agentic: 0.35,
+    agmobench_reasoning: 0.3,
+    agmobench: 0.2,
+    agmobench_coding: 0.15,
+  },
+  approval: {
+    agmobench_robustness: 0.45,
+    agmobench_reasoning: 0.25,
+    agmobench: 0.2,
+    intelligenceIndex: 0.1,
+  },
+  mcp: {
+    agmobench_agentic: 0.4,
+    agmobench_coding: 0.25,
+    agmobench_reasoning: 0.2,
+    agmobench: 0.15,
+  },
+  title_gen: {
+    agmobench: 0.35,
+    agmobench_reasoning: 0.25,
+    intelligenceIndex: 0.2,
+    agmobench_robustness: 0.2,
+  },
+  curator: {
+    agmobench_reasoning: 0.35,
+    agmobench_robustness: 0.25,
+    agmobench_agentic: 0.2,
+    agmobench: 0.2,
+  },
+};
+
+const HERMES_LANE_WEIGHTS: Record<
+  HermesRouteLane,
+  { quality: number; cost: number; latency: number }
+> = {
+  balanced: { quality: 0.55, cost: 0.3, latency: 0.15 },
+  budget: { quality: 0.25, cost: 0.6, latency: 0.15 },
+  quality: { quality: 0.92, cost: 0.04, latency: 0.04 },
+  fast: { quality: 0.25, cost: 0.15, latency: 0.6 },
+};
+
+function metric(model: SnapshotModel, key: string): number | null {
+  const value = model.metricValues[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function scoreQuality(task: HermesRouteTask, model: SnapshotModel): number {
+  const weights = HERMES_TASK_METRIC_WEIGHTS[task];
+  let weighted = 0;
+  let total = 0;
+
+  for (const [key, weight] of Object.entries(weights)) {
+    const value = metric(model, key);
+    if (value == null) continue;
+    weighted += Math.max(0, Math.min(1, value / 100)) * weight;
+    total += weight;
+  }
+
+  return total > 0 ? weighted / total : 0;
+}
+
+function positiveMetric(model: SnapshotModel, key: string): number | null {
+  const value = metric(model, key);
+  return value != null && value > 0 ? value : null;
+}
+
+function scoreCost(model: SnapshotModel): number {
+  const cost = positiveMetric(model, "blendedPricePerM");
+  if (cost == null) return 0.35;
+  if (cost <= 0.5) return 1;
+  if (cost <= 1) return 0.94;
+  if (cost <= 3) return 0.84;
+  if (cost <= 5) return 0.74;
+  if (cost <= 10) return 0.58;
+  if (cost <= 20) return 0.42;
+  return 0.25;
+}
+
+function scoreLatency(model: SnapshotModel): number {
+  const tps = positiveMetric(model, "outputTokensPerSec");
+  const ttft = positiveMetric(model, "ttftSeconds");
+  const tpsScore = tps == null ? 0.45 : Math.max(0.1, Math.min(1, tps / 200));
+  const ttftScore = ttft == null ? 0.55 : Math.max(0.1, Math.min(1, 1.5 / Math.max(ttft, 0.05)));
+  return tpsScore * 0.65 + ttftScore * 0.35;
+}
+
+function evidenceGrade(qualityScore: number): HermesRouteRecommendation["evidence"]["evidence_grade"] {
+  if (qualityScore >= 0.93) return "A";
+  if (qualityScore >= 0.88) return "A-";
+  if (qualityScore >= 0.82) return "B+";
+  if (qualityScore >= 0.74) return "B";
+  return "C";
+}
+
+function roundScore(value: number): number {
+  return Math.round(value * 1000) / 1000;
+}
+
+function familyForModel(
+  model: SnapshotModel,
+  modelFamilies: import("./types.js").SnapshotModelFamily[] = [],
+): string {
+  const family = modelFamilies.find(
+    (candidate) =>
+      candidate.primarySlug === model.slug || candidate.slugs.includes(model.slug),
+  );
+  return family?.routingName ?? model.slug;
+}
+
+function passesHermesConstraints(
+  model: SnapshotModel,
+  constraints: HermesRouteConstraints | undefined,
+): boolean {
+  if (!constraints) return true;
+
+  if (constraints.providerAllowlist?.length) {
+    const allowed = new Set(
+      constraints.providerAllowlist.map((provider) => provider.trim().toLowerCase()),
+    );
+    if (
+      !allowed.has(model.providerSlug.toLowerCase()) &&
+      !allowed.has(model.providerName.toLowerCase())
+    ) {
+      return false;
+    }
+  }
+
+  const cost = positiveMetric(model, "blendedPricePerM");
+  if (
+    constraints.maxCostPerMtok != null &&
+    (cost == null || cost > constraints.maxCostPerMtok)
+  ) {
+    return false;
+  }
+
+  if (
+    constraints.minContextTokens != null &&
+    (model.contextWindow == null || model.contextWindow < constraints.minContextTokens)
+  ) {
+    return false;
+  }
+
+  const ttft = positiveMetric(model, "ttftSeconds");
+  if (
+    constraints.maxLatencyMs != null &&
+    (ttft == null || ttft * 1000 > constraints.maxLatencyMs)
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+export function recommendHermesRoute(
+  task: HermesRouteTask,
+  models: SnapshotModel[],
+  options: RecommendHermesRouteOptions = {},
+): HermesRouteRecommendation[] {
+  const lane = options.lane ?? "balanced";
+  const weights = HERMES_LANE_WEIGHTS[lane];
+
+  return models
+    .filter((model) => passesHermesConstraints(model, options.constraints))
+    .map((model) => {
+      const qualityScore = scoreQuality(task, model);
+      const costScore = scoreCost(model);
+      const latencyScore = scoreLatency(model);
+      const score =
+        qualityScore * weights.quality +
+        costScore * weights.cost +
+        latencyScore * weights.latency;
+      const provider = model.providerSlug || model.providerName.toLowerCase();
+      const cost = positiveMetric(model, "blendedPricePerM");
+      const tps = positiveMetric(model, "outputTokensPerSec");
+      const ttft = positiveMetric(model, "ttftSeconds");
+
+      return {
+        task,
+        lane,
+        route_id: `${provider}:${model.slug}`,
+        provider,
+        model: model.slug,
+        name: model.name,
+        canonical_family: familyForModel(model, options.modelFamilies),
+        score: roundScore(score),
+        expected: {
+          cost_per_mtok: cost,
+          output_tokens_per_sec: tps,
+          ttft_ms: ttft == null ? null : Math.round(ttft * 1000),
+          context_tokens: model.contextWindow,
+        },
+        evidence: {
+          quality_score: roundScore(qualityScore),
+          cost_score: roundScore(costScore),
+          latency_score: roundScore(latencyScore),
+          evidence_grade: evidenceGrade(qualityScore),
+        },
+        reason: `Recommended for Hermes ${task} using the ${lane} lane trade-off across task quality, cost, and latency.`,
+      } satisfies HermesRouteRecommendation;
+    })
+    .filter((candidate) => candidate.evidence.quality_score > 0)
+    .sort((a, b) => {
+      const scoreDiff = b.score - a.score;
+      if (scoreDiff !== 0) return scoreDiff;
+      return b.evidence.quality_score - a.evidence.quality_score;
+    })
+    .slice(0, options.limit ?? 5);
+}
+
+export function recommendHermesAuxiliaryModels(
+  models: SnapshotModel[],
+  options: RecommendHermesAuxiliaryOptions = {},
+): Record<HermesRouteTask, HermesRouteRecommendation[]> {
+  return Object.fromEntries(
+    HERMES_ROUTE_TASKS.map((task) => [
+      task,
+      recommendHermesRoute(task, models, {
+        lane: options.lane,
+        constraints: options.constraints,
+        modelFamilies: options.modelFamilies,
+        limit: options.limitPerTask ?? 3,
+      }),
+    ]),
+  ) as Record<HermesRouteTask, HermesRouteRecommendation[]>;
+}
