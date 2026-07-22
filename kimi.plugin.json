@@ -1,0 +1,32 @@
+{
+  "name": "interrank",
+  "version": "0.3.1",
+  "description": "Snapshot-backed model/benchmark ranking MCP server for AgMoDB",
+  "license": "MIT",
+  "keywords": [
+    "mcp",
+    "benchmarks",
+    "leaderboard",
+    "agmodb",
+    "snapshot"
+  ],
+  "author": "mistakeknot",
+  "interface": {
+    "displayName": "interrank",
+    "shortDescription": "Snapshot-backed model/benchmark ranking MCP server for AgMoDB"
+  },
+  "mcpServers": {
+    "interrank": {
+      "command": "bash",
+      "args": [
+        "${KIMI_PLUGIN_ROOT}/scripts/launch-interrank.sh"
+      ],
+      "env": {
+        "AGMODB_SNAPSHOT_REPOSITORY": "mistakeknot/agmodb",
+        "AGMODB_SNAPSHOT_TAG": "data-snapshot-latest",
+        "AGMODB_SNAPSHOT_ASSET": "agmodb-snapshot.json.gz",
+        "AGMODB_SNAPSHOT_REFRESH_MS": "300000"
+      }
+    }
+  }
+}
