@@ -26,7 +26,8 @@ pnpm mcp
 
 ### Snapshot Auth
 
-If the snapshot repo is private, provide one of:
+The default `https://agmodb.com/api/v1/snapshot` source is public. If you
+explicitly override it with the private AgMoDB GitHub release, provide one of:
 - `AGMODB_GITHUB_TOKEN`
 - `GITHUB_TOKEN`
 - `GH_TOKEN`

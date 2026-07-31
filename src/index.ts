@@ -8,6 +8,7 @@ import {
   type SnapshotIndexes,
   type SnapshotSource,
 } from "./load.js";
+import { resolveSnapshotSource } from "./source.js";
 import type {
   PublicDataSnapshot,
   SnapshotModel,
@@ -25,9 +26,6 @@ import {
 
 const DEFAULT_REFRESH_MS = 5 * 60 * 1000;
 const MAX_LIMIT = 200;
-const DEFAULT_SNAPSHOT_REPOSITORY = "mistakeknot/agmodb";
-const DEFAULT_SNAPSHOT_TAG = "data-snapshot-latest";
-const DEFAULT_SNAPSHOT_ASSET = "agmodb-snapshot.json.gz";
 
 type SnapshotState = {
   snapshot: PublicDataSnapshot;
@@ -86,51 +84,6 @@ function parseArgValue(argv: string[], flag: string): string | null {
   const idx = argv.indexOf(flag);
   if (idx === -1) return null;
   return argv[idx + 1] ?? null;
-}
-
-function resolveSourceFromArgs(argv: string[]): SnapshotSource {
-  const argPath = parseArgValue(argv, "--snapshot-path");
-  const argUrl = parseArgValue(argv, "--snapshot-url");
-  const argRepo = parseArgValue(argv, "--snapshot-repo");
-  const argTag = parseArgValue(argv, "--snapshot-tag");
-  const argAsset = parseArgValue(argv, "--snapshot-asset");
-  const envPath = process.env.AGMODB_SNAPSHOT_PATH;
-  const envUrl = process.env.AGMODB_SNAPSHOT_URL;
-  const envRepo = process.env.AGMODB_SNAPSHOT_REPOSITORY;
-  const envTag = process.env.AGMODB_SNAPSHOT_TAG;
-  const envAsset = process.env.AGMODB_SNAPSHOT_ASSET;
-  const token =
-    process.env.AGMODB_GITHUB_TOKEN ??
-    process.env.GITHUB_TOKEN ??
-    process.env.GH_TOKEN ??
-    null;
-
-  const path = argPath ?? envPath;
-  if (path) {
-    return { kind: "file", path };
-  }
-
-  const url = argUrl ?? envUrl;
-  if (url) {
-    return { kind: "url", url };
-  }
-
-  const repository = argRepo ?? envRepo ?? DEFAULT_SNAPSHOT_REPOSITORY;
-  const [owner, repo] = repository.split("/");
-  if (!owner || !repo) {
-    throw new Error(
-      `Invalid snapshot repository: ${repository}. Expected owner/repo.`,
-    );
-  }
-
-  return {
-    kind: "githubRelease",
-    owner,
-    repo,
-    tag: argTag ?? envTag ?? DEFAULT_SNAPSHOT_TAG,
-    assetName: argAsset ?? envAsset ?? DEFAULT_SNAPSHOT_ASSET,
-    token,
-  };
 }
 
 function resolveRefreshMs(argv: string[]): number {
@@ -218,14 +171,14 @@ function modelCard(model: SnapshotModel, metricKey?: string) {
 
 async function main() {
   const argv = process.argv.slice(2);
-  const source = resolveSourceFromArgs(argv);
+  const source = resolveSnapshotSource(argv, process.env);
   const refreshMs = resolveRefreshMs(argv);
 
   const store = new SnapshotStore(source, refreshMs, sourceLabel(source));
 
   const server = new McpServer({
     name: "interrank",
-    version: "0.3.3",
+    version: "0.3.4",
   });
 
   server.registerTool(

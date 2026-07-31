@@ -4,7 +4,7 @@ Snapshot-backed MCP server for querying AgMoDB models and benchmark metadata wit
 
 ## What It Does
 
-- Loads a published AgMoDB JSON snapshot (`.json` or `.json.gz`) from GitHub or local file.
+- Loads AgMoDB's public JSON snapshot by default, with URL, GitHub release, and local-file overrides.
 - Serves read-only ranking and lookup tools over MCP stdio.
 - Caches snapshot in memory and auto-refreshes on interval.
 
@@ -82,10 +82,14 @@ The plugin manifest points at `scripts/launch-interrank.sh`, which auto-installs
 
 ## Data Source
 
-Default snapshot source is GitHub release asset resolution via API:
-- Repository: `mistakeknot/agmodb`
-- Tag: `data-snapshot-latest`
-- Asset: `agmodb-snapshot.json.gz`
+Default snapshot source is AgMoDB's public, cacheable v3 endpoint:
+
+- URL: `https://agmodb.com/api/v1/snapshot`
+- Authentication: none
+
+The GitHub release flags remain available as an explicit override. Because
+AgMoDB's source repository is private, that override requires a token with
+access to the repository.
 
 Override with env vars:
 
@@ -94,5 +98,5 @@ Override with env vars:
 - `AGMODB_SNAPSHOT_REPOSITORY`
 - `AGMODB_SNAPSHOT_TAG`
 - `AGMODB_SNAPSHOT_ASSET`
-- `AGMODB_GITHUB_TOKEN` (or `GITHUB_TOKEN` / `GH_TOKEN` for private repos)
+- `AGMODB_GITHUB_TOKEN` (or `GITHUB_TOKEN` / `GH_TOKEN` for private GitHub release overrides)
 - `AGMODB_SNAPSHOT_REFRESH_MS`
