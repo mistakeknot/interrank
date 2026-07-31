@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  assertSnapshotShape,
   buildSnapshotIndexes,
   sortForMetric,
 } from "./load.js";
@@ -105,6 +106,28 @@ const SNAPSHOT: PublicDataSnapshot = {
 };
 
 describe("snapshot load helpers", () => {
+  it("accepts v2 snapshots and requires Decision Packet metadata in v3", () => {
+    expect(() => assertSnapshotShape(SNAPSHOT)).not.toThrow();
+    const invalidV3 = structuredClone(SNAPSHOT);
+    invalidV3.meta.version = 3;
+    expect(() => assertSnapshotShape(invalidV3)).toThrow(/contractVersion/);
+
+    const validV3 = structuredClone(SNAPSHOT);
+    validV3.meta = {
+      ...validV3.meta,
+      version: 3,
+      contractVersion: "agmodb.decision-packet.v1",
+      policyVersion: "agmodb.recommendation.v1",
+      catalogDigest: "a".repeat(64),
+    };
+    validV3.models = validV3.models.map((model) => ({
+      ...model,
+      isOpenWeight: false,
+      syncedAt: null,
+    }));
+    expect(() => assertSnapshotShape(validV3)).not.toThrow();
+  });
+
   it("builds slug and metric indexes", () => {
     const indexes = buildSnapshotIndexes(SNAPSHOT);
 

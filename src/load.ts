@@ -37,7 +37,9 @@ function maybeDecompress(buffer: Buffer): string {
   return buffer.toString("utf8");
 }
 
-function assertSnapshotShape(data: unknown): asserts data is PublicDataSnapshot {
+export function assertSnapshotShape(
+  data: unknown,
+): asserts data is PublicDataSnapshot {
   if (!data || typeof data !== "object") {
     throw new Error("Snapshot payload is not an object");
   }
@@ -54,6 +56,42 @@ function assertSnapshotShape(data: unknown): asserts data is PublicDataSnapshot 
   }
   if (!Array.isArray(snapshot.benchmarks)) {
     throw new Error("Snapshot payload is missing benchmarks[]");
+  }
+
+  const meta = snapshot.meta as Record<string, unknown>;
+  if (typeof meta.version !== "number") {
+    throw new Error("Snapshot meta.version must be a number");
+  }
+  if (meta.version >= 3) {
+    if (meta.contractVersion !== "agmodb.decision-packet.v1") {
+      throw new Error("Snapshot v3 has an unsupported contractVersion");
+    }
+    if (meta.policyVersion !== "agmodb.recommendation.v1") {
+      throw new Error("Snapshot v3 has an unsupported policyVersion");
+    }
+    if (
+      typeof meta.catalogDigest !== "string" ||
+      !/^[a-f0-9]{64}$/.test(meta.catalogDigest)
+    ) {
+      throw new Error("Snapshot v3 is missing a valid catalogDigest");
+    }
+    for (const [index, value] of snapshot.models.entries()) {
+      if (!value || typeof value !== "object") {
+        throw new Error(`Snapshot v3 model ${index} is not an object`);
+      }
+      const model = value as Record<string, unknown>;
+      if (typeof model.isOpenWeight !== "boolean") {
+        throw new Error(
+          `Snapshot v3 model ${index} is missing isOpenWeight`,
+        );
+      }
+      if (
+        model.syncedAt !== null &&
+        typeof model.syncedAt !== "string"
+      ) {
+        throw new Error(`Snapshot v3 model ${index} has invalid syncedAt`);
+      }
+    }
   }
 }
 

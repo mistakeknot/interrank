@@ -13,8 +13,15 @@ import type {
   SnapshotModel,
   SnapshotModelFamily,
 } from "./types.js";
-import { scoreBenchmarks, recommendModels } from "./recommend.js";
+import { scoreBenchmarks } from "./recommend.js";
 import { resolveRoutingName } from "./resolve.js";
+import {
+  buildRecommendModelToolResult,
+  decisionPacketSchema,
+  normalizeRecommendModelToolInput,
+  RECOMMEND_MODEL_TOOL_ANNOTATIONS,
+  recommendModelToolInputSchema,
+} from "./decision-packet.js";
 
 const DEFAULT_REFRESH_MS = 5 * 60 * 1000;
 const MAX_LIMIT = 200;
@@ -218,7 +225,7 @@ async function main() {
 
   const server = new McpServer({
     name: "interrank",
-    version: "0.2.0",
+    version: "0.3.2",
   });
 
   server.registerTool(
@@ -470,55 +477,19 @@ async function main() {
   server.registerTool(
     "recommend_model",
     {
+      title: "Recommend model with Decision Packet",
       description:
-        "Given a task description, recommend the best models. Chains benchmark relevance scoring into weighted model ranking with confidence indicators.",
-      inputSchema: {
-        task: z
-          .string()
-          .min(1)
-          .describe(
-            "Natural-language task description, e.g. 'code review agent for Go' or 'customer support chatbot'.",
-          ),
-        budget: z
-          .enum(["low", "medium", "high"])
-          .optional()
-          .describe(
-            "Budget constraint. low: <$1/MTok, medium: <$10/MTok, high: unlimited.",
-          ),
-        provider: z
-          .string()
-          .optional()
-          .describe("Filter to models from this provider (slug or name)."),
-        limit: z
-          .number()
-          .int()
-          .min(1)
-          .max(50)
-          .optional()
-          .describe("Max models to return (default: 5)."),
-      },
+        "Build the canonical AgMoDB Decision Packet for a natural-language task and absolute constraints, including stable route identity, cost, latency, provenance, uncertainty, freshness, alternatives, and the next discriminating eval.",
+      inputSchema: recommendModelToolInputSchema,
+      outputSchema: decisionPacketSchema,
+      annotations: RECOMMEND_MODEL_TOOL_ANNOTATIONS,
     },
-    async ({ task, budget, provider, limit }) => {
+    async (input) => {
       const state = await store.get();
-
-      const results = recommendModels(
-        task,
-        state.snapshot.benchmarks,
-        state.snapshot.models,
-        {
-          budget,
-          costMetric: "blendedPricePerM",
-          provider,
-          limit: limit ?? 5,
-        },
+      return buildRecommendModelToolResult(
+        normalizeRecommendModelToolInput(input),
+        state.snapshot,
       );
-
-      return jsonContent({
-        task,
-        budget: budget ?? null,
-        total: results.length,
-        items: results,
-      });
     },
   );
 

@@ -13,6 +13,7 @@ export type SnapshotBenchmark = {
   name: string;
   slug: string;
   source: string;
+  sourceUrl?: string | null;
   category: string;
   description: string | null;
   strengths: string | null;
@@ -36,13 +37,25 @@ export type SnapshotModel = {
   releaseDate: string | null;
   contextWindow: number | null;
   outputTokens: number | null;
+  /** Required by snapshot v3; absent v2 values fall back conservatively. */
+  isOpenWeight?: boolean;
+  /** Required by snapshot v3; v2 falls back to meta.modelSyncMaxAt. */
+  syncedAt?: string | null;
   metricValues: Record<string, number>;
   predictedMetricKeys: string[];
   capabilitySummary: string | null;
+  variant?: {
+    reasoning: "reasoning" | "non-reasoning" | "unspecified";
+    effort: string | null;
+    snapshot: string | null;
+  };
 };
 
 export type SnapshotMeta = {
   version: number;
+  contractVersion?: "agmodb.decision-packet.v1";
+  policyVersion?: "agmodb.recommendation.v1";
+  catalogDigest?: string;
   generatedAt: string;
   sourceRepo: string;
   sourceCommit: string | null;
