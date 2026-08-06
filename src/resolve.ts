@@ -9,20 +9,20 @@
  * dropped any variant intent. There was also no way for the agent to tell
  * which variant it actually got.
  *
- * This resolver:
- *   1. Normalizes the query (case, parens, "thinking" ≡ "reasoning").
- *   2. Splits an explicit variant qualifier off the routing name.
- *   3. Resolves the base family, then picks the slug matching the requested
- *      variant — falling back to the family primary if that variant isn't
- *      present, with the fallback flagged.
- *   4. Returns an explicit `variant` field so routing is deterministic.
+ * Snapshot v3 resolves exact slugs, targeted aliases, declared primaries, and
+ * authoritative model variant descriptors in that order. Ambiguous qualified
+ * requests require an exact slug and zero matches fail closed. Older snapshots
+ * retain the historical slug heuristic for response compatibility.
  *
  * Tracks agmodb-dhu.2. The full editorial variant glossary lives in agmodb
  * (src/data/variant-glossary.ts) for the web UI; this is the focused
- * routing-relevant subset. A future snapshot revision could carry canonical
- * variant tags per slug so both sides share one source of truth.
+ * routing-relevant subset.
  */
-import type { SnapshotModelFamily } from "./types.js";
+import type {
+  DecisionRoute,
+  SnapshotModel,
+  SnapshotModelFamily,
+} from "./types.js";
 import type { SnapshotIndexes } from "./load.js";
 
 /** Reasoning posture of a model variant, as far as routing cares. */
@@ -39,10 +39,20 @@ export type ResolvedEffort =
 
 export type RoutingResolution = {
   family: SnapshotModelFamily;
+  catalog: SnapshotIndexes["catalog"];
+  /** Every declared family member, including declared-but-missing slugs. */
+  members: RoutingFamilyMember[];
+  /** Authoritative selection result for agent consumers. */
+  selection: RoutingSelection;
   /** The specific slug chosen for this resolution. */
-  resolvedSlug: string;
+  resolvedSlug: string | null;
   /** Reasoning posture of the resolved slug. */
-  variant: ResolvedVariant;
+  variant:
+    | ResolvedVariant
+    | "unspecified"
+    | null;
+  /** Whether the resolved posture came from v3 metadata or a v2 heuristic. */
+  variantProvenance: "snapshot" | "legacy_inferred" | "unknown";
   /** The variant the caller explicitly asked for, or null if unqualified. */
   requestedVariant: ResolvedVariant | null;
   /**
@@ -57,6 +67,27 @@ export type RoutingResolution = {
    * forward it to the provider.
    */
   effort: ResolvedEffort | null;
+};
+
+export type RoutingFamilyMember = {
+  slug: string;
+  model: SnapshotModel | null;
+  route: DecisionRoute | null;
+};
+
+export type RoutingSelection = {
+  kind:
+    | "exact-slug"
+    | "targeted-alias"
+    | "family-primary"
+    | "qualified-variant"
+    | "ambiguous"
+    | "no-match"
+    | "legacy-qualified-variant"
+    | "legacy-fallback";
+  route: DecisionRoute | null;
+  requiresExactSlug: boolean;
+  candidateSlugs: string[];
 };
 
 /**
@@ -199,6 +230,124 @@ function pickVariantSlug(
   return null;
 }
 
+const ROUTE_IDENTITY_CAVEAT =
+  "This route identifies a model variant only; benchmark harness and deployment configuration remain unresolved.";
+
+/** Build the exact model-level identity used by AgMoDB Decision Packet v1. */
+function decisionRoute(model: SnapshotModel): DecisionRoute {
+  return {
+    id: `agmodb:model:${model.slug}`,
+    identityLevel: "model",
+    modelSlug: model.slug,
+    modelName: model.name,
+    provider: { name: model.providerName, slug: model.providerSlug },
+    variant: model.variant ?? null,
+    harness: null,
+    identityCaveat: ROUTE_IDENTITY_CAVEAT,
+  };
+}
+
+function familyMembers(
+  family: SnapshotModelFamily,
+  indexes: SnapshotIndexes,
+): RoutingFamilyMember[] {
+  return family.slugs.map((slug) => {
+    const model = indexes.modelsBySlug.get(slug) ?? null;
+    return {
+      slug,
+      model,
+      route: model ? decisionRoute(model) : null,
+    };
+  });
+}
+
+function authoritativeVariant(
+  model: SnapshotModel | null,
+): RoutingResolution["variant"] {
+  return model?.variant?.reasoning ?? null;
+}
+
+function requestedVariantForModel(
+  model: SnapshotModel | null,
+): "reasoning" | "non-reasoning" | null {
+  const reasoning = model?.variant?.reasoning;
+  return reasoning === "reasoning" || reasoning === "non-reasoning"
+    ? reasoning
+    : null;
+}
+
+function normalizeEffort(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[-_]+/g, " ")
+    .replace(/\s+effort$/, "")
+    .replace(/\s+/g, " ");
+}
+
+function makeResolution(
+  family: SnapshotModelFamily,
+  indexes: SnapshotIndexes,
+  selection: RoutingSelection,
+  requestedVariant: ResolvedVariant | null,
+  effort: ResolvedEffort | null,
+  legacyVariant?: ResolvedVariant,
+  fellBackToPrimary = false,
+): RoutingResolution {
+  const selectedModel = selection.route
+    ? indexes.modelsBySlug.get(selection.route.modelSlug) ?? null
+    : null;
+  return {
+    family,
+    catalog: indexes.catalog,
+    members: familyMembers(family, indexes),
+    selection,
+    resolvedSlug:
+      selection.route?.modelSlug ??
+      (selection.requiresExactSlug ? null : selection.candidateSlugs[0] ?? null),
+    variant:
+      indexes.catalog.snapshotVersion >= 3
+        ? authoritativeVariant(selectedModel)
+        : (legacyVariant ?? null),
+    variantProvenance:
+      indexes.catalog.snapshotVersion < 3
+        ? "legacy_inferred"
+        : selectedModel?.variant
+          ? "snapshot"
+          : "unknown",
+    requestedVariant,
+    fellBackToPrimary,
+    effort,
+  };
+}
+
+function selectSlug(
+  family: SnapshotModelFamily,
+  indexes: SnapshotIndexes,
+  slug: string,
+  kind: RoutingSelection["kind"],
+  requestedVariant: ResolvedVariant | null,
+  effort: ResolvedEffort | null,
+  legacyVariant?: ResolvedVariant,
+  fellBackToPrimary = false,
+): RoutingResolution {
+  const model = indexes.modelsBySlug.get(slug) ?? null;
+  return makeResolution(
+    family,
+    indexes,
+    {
+      kind,
+      route: model ? decisionRoute(model) : null,
+      requiresExactSlug: false,
+      candidateSlugs: [slug],
+    },
+    requestedVariant,
+    effort,
+    legacyVariant,
+    fellBackToPrimary,
+  );
+}
+
 /**
  * Resolve a routing-level model name to a family + specific slug + variant.
  * Returns null when the name resolves to no known family.
@@ -209,72 +358,174 @@ export function resolveRoutingName(
 ): RoutingResolution | null {
   const normalized = name.trim().toLowerCase();
 
-  // 1. Exact match — a routingName, alias, or full slug.
-  const direct = indexes.familyByName.get(normalized);
-  if (direct) {
-    // If the matched key was itself a variant-bearing slug, honor that slug
-    // and its posture. Otherwise use the family primary.
-    const matchedSlug = direct.slugs.find(
-      (s) => s.toLowerCase() === normalized,
+  // 1. An exact member slug always wins over aliases and qualifiers.
+  const exactFamily = indexes.familyBySlug.get(normalized);
+  const matchedSlug = exactFamily?.slugs.find(
+    (slug) => slug.toLowerCase() === normalized,
+  );
+  if (exactFamily && matchedSlug) {
+    const model = indexes.modelsBySlug.get(matchedSlug) ?? null;
+    const legacyVariant = effectiveVariant(
+      matchedSlug,
+      slugSetFor(exactFamily),
     );
-    const resolvedSlug = matchedSlug ?? direct.primarySlug;
-    const variant = effectiveVariant(resolvedSlug, slugSetFor(direct));
-    // requestedVariant reflects reasoning-posture INTENT, not the resolved
-    // posture. A base-posture slug (e.g. "…-speciale", "claude-opus-4-6")
-    // carries no reasoning intent, so it reports null — only reasoning /
-    // non-reasoning slugs report a requested posture.
-    return {
-      family: direct,
-      resolvedSlug,
-      variant,
-      requestedVariant: matchedSlug && variant !== "base" ? variant : null,
-      fellBackToPrimary: false,
-      effort: null,
-    };
+    return selectSlug(
+      exactFamily,
+      indexes,
+      matchedSlug,
+      "exact-slug",
+      indexes.catalog.snapshotVersion >= 3
+        ? requestedVariantForModel(model)
+        : legacyVariant !== "base"
+          ? legacyVariant
+          : null,
+      null,
+      legacyVariant,
+    );
   }
 
-  // 2. No exact match — strip reasoning and/or effort qualifiers and retry.
+  // 2. A snapshot may bind an alias to one exact family member.
+  const direct = indexes.familyByName.get(normalized);
+  const targetedAlias = indexes.targetedAliasByName.get(normalized);
+  if (targetedAlias) {
+    const model = indexes.modelsBySlug.get(targetedAlias.targetSlug) ?? null;
+    return selectSlug(
+      targetedAlias.family,
+      indexes,
+      targetedAlias.targetSlug,
+      "targeted-alias",
+      requestedVariantForModel(model),
+      null,
+      model
+        ? effectiveVariant(model.slug, slugSetFor(targetedAlias.family))
+        : undefined,
+    );
+  }
+
+  // 3. A bare routing name or untargeted alias selects the declared primary.
+  if (direct) {
+    const legacyVariant = effectiveVariant(
+      direct.primarySlug,
+      slugSetFor(direct),
+    );
+    return selectSlug(
+      direct,
+      indexes,
+      direct.primarySlug,
+      "family-primary",
+      null,
+      null,
+      legacyVariant,
+    );
+  }
+
+  // 4. Strip reasoning and/or effort qualifiers and retry the base family.
   const { base: afterVariant, variant } = parseVariantQualifier(name);
   const { base, effort } = stripEffortQualifier(afterVariant);
 
-  // Only retry when we actually stripped a qualifier (variant or effort) —
-  // otherwise `base` equals the already-failed exact lookup.
-  if (base && (variant || effort)) {
-    const family = indexes.familyByName.get(base);
-    if (family) {
-      if (variant) {
-        const slug = pickVariantSlug(family, variant);
-        if (slug) {
-          return {
-            family,
-            resolvedSlug: slug,
-            variant,
-            requestedVariant: variant,
-            fellBackToPrimary: false,
-            effort,
-          };
+  if (!base || (!variant && !effort)) return null;
+  const family = indexes.familyByName.get(base);
+  if (!family) return null;
+
+  // Snapshot v3 owns variant truth. Do not infer from slugs or silently fall
+  // back when the authoritative descriptors return zero or multiple matches.
+  if (indexes.catalog.snapshotVersion >= 3) {
+    const matches = family.slugs
+      .map((slug) => indexes.modelsBySlug.get(slug) ?? null)
+      .filter((model): model is SnapshotModel => model !== null)
+      .filter((model) => {
+        if (!model.variant) return false;
+        if (variant && model.variant.reasoning !== variant) return false;
+        if (
+          effort &&
+          (model.variant.effort === null ||
+            normalizeEffort(model.variant.effort) !== normalizeEffort(effort))
+        ) {
+          return false;
         }
-        // Requested variant not present — fall back to primary, flag it.
-        return {
-          family,
-          resolvedSlug: family.primarySlug,
-          variant: effectiveVariant(family.primarySlug, slugSetFor(family)),
-          requestedVariant: variant,
-          fellBackToPrimary: true,
-          effort,
-        };
-      }
-      // Effort-only qualifier — resolve the base family, carry the effort.
-      return {
+        return true;
+      });
+
+    if (matches.length === 0) {
+      return makeResolution(
         family,
-        resolvedSlug: family.primarySlug,
-        variant: effectiveVariant(family.primarySlug, slugSetFor(family)),
-        requestedVariant: null,
-        fellBackToPrimary: false,
+        indexes,
+        {
+          kind: "no-match",
+          route: null,
+          requiresExactSlug: false,
+          candidateSlugs: [],
+        },
+        variant,
         effort,
-      };
+      );
     }
+    if (matches.length === 1) {
+      return selectSlug(
+        family,
+        indexes,
+        matches[0].slug,
+        "qualified-variant",
+        variant,
+        effort,
+      );
+    }
+    return makeResolution(
+      family,
+      indexes,
+      {
+        kind: "ambiguous",
+        route: null,
+        requiresExactSlug: true,
+        candidateSlugs: matches.map((model) => model.slug),
+      },
+      variant,
+      effort,
+    );
   }
 
-  return null;
+  // Legacy snapshots have no descriptors. Preserve the previous heuristic
+  // contract until those snapshots age out.
+  if (variant) {
+    const slug = pickVariantSlug(family, variant);
+    if (slug) {
+      return selectSlug(
+        family,
+        indexes,
+        slug,
+        "legacy-qualified-variant",
+        variant,
+        effort,
+        variant,
+      );
+    }
+    const primaryVariant = effectiveVariant(
+      family.primarySlug,
+      slugSetFor(family),
+    );
+    return selectSlug(
+      family,
+      indexes,
+      family.primarySlug,
+      "legacy-fallback",
+      variant,
+      effort,
+      primaryVariant,
+      true,
+    );
+  }
+
+  const primaryVariant = effectiveVariant(
+    family.primarySlug,
+    slugSetFor(family),
+  );
+  return selectSlug(
+    family,
+    indexes,
+    family.primarySlug,
+    "legacy-qualified-variant",
+    null,
+    effort,
+    primaryVariant,
+  );
 }

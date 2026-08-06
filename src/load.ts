@@ -28,6 +28,21 @@ export type SnapshotIndexes = {
   benchmarksBySlug: Map<string, { key: string; slug: string; name: string; higherIsBetter: boolean }>;
   /** Resolve routing names, aliases, and slugs to model families (v2+ snapshots only) */
   familyByName: Map<string, SnapshotModelFamily>;
+  /** Resolve exact declared member slugs before consulting routing aliases. */
+  familyBySlug: Map<string, SnapshotModelFamily>;
+  /** Optional exact alias-to-variant bindings supplied by the snapshot. */
+  targetedAliasByName: Map<
+    string,
+    { family: SnapshotModelFamily; targetSlug: string }
+  >;
+  /** Snapshot provenance returned with routing selections. */
+  catalog: {
+    digest: string | null;
+    generatedAt: string;
+    sourceRepo: string;
+    sourceCommit: string | null;
+    snapshotVersion: number;
+  };
 };
 
 function maybeDecompress(buffer: Buffer): string {
@@ -90,6 +105,37 @@ export function assertSnapshotShape(
         typeof model.syncedAt !== "string"
       ) {
         throw new Error(`Snapshot v3 model ${index} has invalid syncedAt`);
+      }
+    }
+
+    if (Array.isArray(snapshot.modelFamilies)) {
+      for (const [index, value] of snapshot.modelFamilies.entries()) {
+        if (!value || typeof value !== "object") continue;
+        const family = value as Record<string, unknown>;
+        if (family.aliasTargets === undefined) continue;
+        if (
+          !family.aliasTargets ||
+          typeof family.aliasTargets !== "object" ||
+          Array.isArray(family.aliasTargets)
+        ) {
+          throw new Error(
+            `Snapshot v3 family ${index} has invalid aliasTargets`,
+          );
+        }
+        const slugs = new Set(
+          Array.isArray(family.slugs)
+            ? family.slugs.filter((slug): slug is string => typeof slug === "string")
+            : [],
+        );
+        for (const target of Object.values(
+          family.aliasTargets as Record<string, unknown>,
+        )) {
+          if (typeof target !== "string" || !slugs.has(target)) {
+            throw new Error(
+              `Snapshot v3 family ${index} alias target is not a declared member`,
+            );
+          }
+        }
       }
     }
   }
@@ -198,6 +244,11 @@ export function buildSnapshotIndexes(snapshot: PublicDataSnapshot): SnapshotInde
 
   // Build family index from v2+ snapshots
   const familyByName = new Map<string, SnapshotModelFamily>();
+  const familyBySlug = new Map<string, SnapshotModelFamily>();
+  const targetedAliasByName = new Map<
+    string,
+    { family: SnapshotModelFamily; targetSlug: string }
+  >();
   if (Array.isArray(snapshot.modelFamilies)) {
     for (const family of snapshot.modelFamilies) {
       // Index by routing name (primary lookup)
@@ -206,8 +257,16 @@ export function buildSnapshotIndexes(snapshot: PublicDataSnapshot): SnapshotInde
       for (const alias of family.aliases) {
         familyByName.set(alias.toLowerCase(), family);
       }
+      for (const [alias, targetSlug] of Object.entries(
+        family.aliasTargets ?? {},
+      )) {
+        targetedAliasByName.set(alias.toLowerCase(), { family, targetSlug });
+      }
       // Index by member slugs (so a full slug also resolves)
       for (const slug of family.slugs) {
+        if (!familyBySlug.has(slug.toLowerCase())) {
+          familyBySlug.set(slug.toLowerCase(), family);
+        }
         if (!familyByName.has(slug.toLowerCase())) {
           familyByName.set(slug.toLowerCase(), family);
         }
@@ -221,6 +280,15 @@ export function buildSnapshotIndexes(snapshot: PublicDataSnapshot): SnapshotInde
     benchmarksByKey,
     benchmarksBySlug,
     familyByName,
+    familyBySlug,
+    targetedAliasByName,
+    catalog: {
+      digest: snapshot.meta.catalogDigest ?? null,
+      generatedAt: snapshot.meta.generatedAt,
+      sourceRepo: snapshot.meta.sourceRepo,
+      sourceCommit: snapshot.meta.sourceCommit,
+      snapshotVersion: snapshot.meta.version,
+    },
   };
 }
 

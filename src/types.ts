@@ -76,8 +76,28 @@ export type SnapshotModelFamily = {
   primarySlug: string;
   slugs: string[];
   aliases: string[];
+  /**
+   * Optional exact alias-to-slug bindings. Plain aliases continue to select
+   * the declared family primary; only aliases listed here target a variant.
+   */
+  aliasTargets?: Record<string, string>;
   costTier: "budget" | "mid" | "premium";
   strengths: string[];
+};
+
+/** Exact route identity shared with AgMoDB Decision Packet v1. */
+export type DecisionRoute = {
+  id: string;
+  identityLevel: "model";
+  modelSlug: string;
+  modelName: string;
+  provider: {
+    name: string;
+    slug: string;
+  };
+  variant: SnapshotModel["variant"] | null;
+  harness: null;
+  identityCaveat: string;
 };
 
 export type PublicDataSnapshot = {

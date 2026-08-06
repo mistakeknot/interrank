@@ -128,12 +128,39 @@ describe("snapshot load helpers", () => {
     expect(() => assertSnapshotShape(validV3)).not.toThrow();
   });
 
+  it("rejects a v3 alias target that is not declared as a family member", () => {
+    const invalid = structuredClone(SNAPSHOT);
+    invalid.meta = {
+      ...invalid.meta,
+      version: 3,
+      contractVersion: "agmodb.decision-packet.v1",
+      policyVersion: "agmodb.recommendation.v1",
+      catalogDigest: "b".repeat(64),
+    };
+    invalid.models = invalid.models.map((entry) => ({
+      ...entry,
+      isOpenWeight: false,
+      syncedAt: null,
+    }));
+    invalid.modelFamilies![0].aliasTargets = {
+      "premium-exact": "not-a-member",
+    };
+    expect(() => assertSnapshotShape(invalid)).toThrow(/alias target/i);
+  });
+
   it("builds slug and metric indexes", () => {
     const indexes = buildSnapshotIndexes(SNAPSHOT);
 
     expect(indexes.modelsBySlug.get("model-a")?.name).toBe("Model A");
     expect(indexes.metricsByKey.get("agmobench")?.label).toBe("AgMoBench");
     expect(indexes.benchmarksBySlug.get("agmobench")?.key).toBe("agmobench");
+    expect(indexes.catalog).toEqual({
+      digest: null,
+      generatedAt: "2026-02-27T00:00:00.000Z",
+      sourceRepo: "mistakeknot/agmodb",
+      sourceCommit: "abc123",
+      snapshotVersion: 2,
+    });
   });
 
   it("sorts desc for higher-is-better metrics", () => {
@@ -168,6 +195,18 @@ describe("model family index", () => {
     const indexes = buildSnapshotIndexes(SNAPSHOT);
     expect(indexes.familyByName.get("model-a")?.routingName).toBe("tier-a");
     expect(indexes.familyByName.get("model-b")?.routingName).toBe("tier-b");
+    expect(indexes.familyBySlug.get("model-a")?.routingName).toBe("tier-a");
+    expect(indexes.familyBySlug.get("model-b")?.routingName).toBe("tier-b");
+  });
+
+  it("keeps exact slugs separate from aliases that use the same key", () => {
+    const colliding = structuredClone(SNAPSHOT);
+    colliding.modelFamilies![0].aliases.push("model-b");
+
+    const indexes = buildSnapshotIndexes(colliding);
+
+    expect(indexes.familyByName.get("model-b")?.routingName).toBe("tier-a");
+    expect(indexes.familyBySlug.get("model-b")?.routingName).toBe("tier-b");
   });
 
   it("stores all keys as lowercase for case-insensitive lookup", () => {
@@ -185,6 +224,19 @@ describe("model family index", () => {
     const v1Snapshot = { ...SNAPSHOT, modelFamilies: undefined };
     const indexes = buildSnapshotIndexes(v1Snapshot);
     expect(indexes.familyByName.size).toBe(0);
+  });
+
+  it("indexes optional alias targets separately from family aliases", () => {
+    const targeted = structuredClone(SNAPSHOT);
+    targeted.modelFamilies![0].aliases.push("premium-exact");
+    targeted.modelFamilies![0].aliasTargets = {
+      "premium-exact": "model-a",
+    };
+    const indexes = buildSnapshotIndexes(targeted);
+    expect(indexes.targetedAliasByName.get("premium-exact")).toEqual({
+      family: targeted.modelFamilies![0],
+      targetSlug: "model-a",
+    });
   });
 });
 

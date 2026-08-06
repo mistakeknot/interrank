@@ -939,12 +939,25 @@ async function main() {
 
       const family = resolution.family;
 
-      // Use the model the resolver actually selected (the variant-specific
-      // slug), falling back to the family primary then any member slug.
-      let primaryModel =
-        state.indexes.modelsBySlug.get(resolution.resolvedSlug) ??
-        state.indexes.modelsBySlug.get(family.primarySlug);
-      if (!primaryModel) {
+      // Use only the resolver's selected route. Ambiguous v3 queries must not
+      // silently fall back to a primary or first member.
+      let primaryModel = resolution.selection.route
+        ? state.indexes.modelsBySlug.get(
+            resolution.selection.route.modelSlug,
+          )
+        : undefined;
+      const allowLegacyModelFallback =
+        resolution.catalog.snapshotVersion < 3 &&
+        !resolution.selection.requiresExactSlug;
+      if (!primaryModel && allowLegacyModelFallback) {
+        primaryModel = resolution.resolvedSlug
+          ? state.indexes.modelsBySlug.get(resolution.resolvedSlug)
+          : undefined;
+      }
+      if (!primaryModel && allowLegacyModelFallback) {
+        primaryModel = state.indexes.modelsBySlug.get(family.primarySlug);
+      }
+      if (!primaryModel && allowLegacyModelFallback) {
         for (const slug of family.slugs) {
           primaryModel = state.indexes.modelsBySlug.get(slug);
           if (primaryModel) break;
@@ -988,6 +1001,7 @@ async function main() {
       }
 
       return jsonContent({
+        catalog: resolution.catalog,
         family: {
           routingName: family.routingName,
           displayName: family.displayName,
@@ -997,7 +1011,24 @@ async function main() {
           strengths: family.strengths,
           memberSlugs: family.slugs,
           aliases: family.aliases,
+          aliasTargets: family.aliasTargets ?? {},
+          members: resolution.members.map((member) => ({
+            slug: member.slug,
+            present: member.model !== null,
+            route: member.route,
+            model: member.model
+              ? {
+                  slug: member.model.slug,
+                  name: member.model.name,
+                  provider: member.model.providerName,
+                  providerSlug: member.model.providerSlug,
+                  releaseDate: member.model.releaseDate,
+                  capabilitySummary: member.model.capabilitySummary,
+                }
+              : null,
+          })),
         },
+        selection: resolution.selection,
         primaryModel: primaryModel
           ? {
               slug: primaryModel.slug,
@@ -1015,13 +1046,15 @@ async function main() {
         variant: {
           resolvedSlug: resolution.resolvedSlug,
           posture: resolution.variant,
+          provenance: resolution.variantProvenance,
           requested: resolution.requestedVariant,
           fellBackToPrimary: resolution.fellBackToPrimary,
           effort: resolution.effort,
         },
         domainScores,
         keyMetrics,
-        resolved: primaryModel != null,
+        resolved:
+          primaryModel != null && resolution.selection.route !== null,
       });
     },
   );

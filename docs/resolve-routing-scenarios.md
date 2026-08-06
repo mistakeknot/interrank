@@ -4,6 +4,32 @@ Tracks the realistic-scenario streak for `resolveRoutingName` (agmodb-dhu.2).
 Each failure is documented here, gets a regression test in `src/resolve.test.ts`,
 is fixed, then the streak restarts. Target: 10 consecutive passing scenarios.
 
+## Snapshot v3 authoritative routing contract
+
+Snapshot v3 model `variant` descriptors are authoritative. Interrank does not
+reclassify a v3 model whose descriptor is absent, and it never falls back to a
+family primary when an explicit reasoning or effort qualifier has no match.
+The deterministic precedence is:
+
+1. An exact declared member slug selects that model.
+2. An alias listed in optional `aliasTargets` selects its declared target.
+3. A bare routing name or untargeted alias selects `primarySlug`.
+4. Reasoning and effort qualifiers filter the family members' snapshot
+   descriptors. One match selects; multiple matches return no route with
+   `requiresExactSlug: true`; zero matches return an explicit `no-match`
+   selection with no route or primary substitution.
+
+The MCP response includes snapshot catalog provenance, every declared family
+member, and a `selection` object. Every selected or member route uses the exact
+AgMoDB Decision Packet v1 model-level route shape, including the authoritative
+variant descriptor and the unresolved-harness caveat. Snapshot v2 and older
+retain their legacy slug heuristic for compatibility only, and every posture
+derived from that heuristic is labeled `legacy_inferred`.
+
+An exact adaptive slug such as `claude-opus-4-6-adaptive` is valid. The query
+`opus adaptive` is not: `adaptive` is not an authoritative reasoning/effort
+qualifier, so Interrank does not invent an adaptive mode from the slug.
+
 ## Failure 1 — sibling-inferred reasoning variant (Anthropic naming inversion)
 
 **Inputs:** `opus reasoning`, `opus thinking`, `opus (Reasoning)`

@@ -140,6 +140,117 @@ function makeIndexes() {
   return buildSnapshotIndexes(snapshot);
 }
 
+function model(
+  id: number,
+  slug: string,
+  variant: PublicDataSnapshot["models"][number]["variant"],
+): PublicDataSnapshot["models"][number] {
+  return {
+    id,
+    name: slug,
+    slug,
+    providerName: slug.startsWith("claude") ? "Anthropic" : "OpenAI",
+    providerSlug: slug.startsWith("claude") ? "anthropic" : "openai",
+    description: null,
+    releaseDate: null,
+    contextWindow: null,
+    outputTokens: null,
+    isOpenWeight: false,
+    syncedAt: "2026-08-06T12:00:00.000Z",
+    metricValues: {},
+    predictedMetricKeys: [],
+    capabilitySummary: null,
+    ...(variant === undefined ? {} : { variant }),
+  };
+}
+
+function makeV3Indexes() {
+  const snapshot: PublicDataSnapshot = {
+    meta: {
+      version: 3,
+      contractVersion: "agmodb.decision-packet.v1",
+      policyVersion: "agmodb.recommendation.v1",
+      catalogDigest: "a".repeat(64),
+      generatedAt: "2026-08-06T12:30:00.000Z",
+      sourceRepo: "mistakeknot/agmodb",
+      sourceCommit: "fixture-v3",
+      modelSyncMaxAt: "2026-08-06T12:00:00.000Z",
+      counts: {
+        models: 7,
+        benchmarks: 0,
+        metrics: 0,
+        metricValues: 0,
+        predictedCells: 0,
+      },
+    },
+    metrics: [],
+    benchmarks: [],
+    models: [
+      model(1, "claude-opus-4-6", undefined),
+      model(2, "claude-opus-4-6-adaptive", {
+        reasoning: "reasoning",
+        effort: null,
+        snapshot: null,
+      }),
+      model(3, "claude-opus-4-5-thinking", {
+        reasoning: "reasoning",
+        effort: null,
+        snapshot: null,
+      }),
+      model(4, "gpt-5-2", undefined),
+      model(5, "gpt-5-2-medium", {
+        reasoning: "reasoning",
+        effort: "Medium Effort",
+        snapshot: null,
+      }),
+      model(6, "gpt-5-4", undefined),
+      model(7, "gpt-5-4-pro", {
+        reasoning: "reasoning",
+        effort: "High Effort",
+        snapshot: null,
+      }),
+    ],
+    modelFamilies: [
+      {
+        routingName: "opus",
+        displayName: "Claude Opus (latest)",
+        provider: "anthropic",
+        primarySlug: "claude-opus-4-6",
+        slugs: [
+          "claude-opus-4-6",
+          "claude-opus-4-6-adaptive",
+          "claude-opus-4-5-thinking",
+        ],
+        aliases: ["claude-opus"],
+        costTier: "premium",
+        strengths: ["reasoning", "coding"],
+      },
+      {
+        routingName: "gpt-5.2",
+        displayName: "GPT-5.2",
+        provider: "openai",
+        primarySlug: "gpt-5-2",
+        slugs: ["gpt-5-2", "gpt-5-2-medium"],
+        aliases: [],
+        costTier: "premium",
+        strengths: ["reasoning"],
+      },
+      {
+        routingName: "gpt-5.4",
+        displayName: "GPT-5.4",
+        provider: "openai",
+        primarySlug: "gpt-5-4",
+        slugs: ["gpt-5-4", "gpt-5-4-pro"],
+        aliases: ["gpt-5.4-pro"],
+        aliasTargets: { "gpt-5.4-pro": "gpt-5-4-pro" },
+        costTier: "premium",
+        strengths: ["reasoning"],
+      },
+    ],
+  };
+  return buildSnapshotIndexes(snapshot);
+}
+
 describe("classifySlugVariant", () => {
   it("classifies non-reasoning before reasoning (substring trap)", () => {
     expect(classifySlugVariant("claude-opus-4-7-non-reasoning")).toBe(
@@ -514,5 +625,174 @@ describe("resolveRoutingName — realistic scenarios (agmodb-dhu.2)", () => {
 
   it("returns null for an unknown routing name", () => {
     expect(resolveRoutingName("claude-opus-99", indexes)).toBeNull();
+  });
+
+  it("labels every v2 heuristic posture as legacy_inferred", () => {
+    expect(
+      ["opus", "grok-4-20-non-reasoning", "gpt-5.2 reasoning"].map(
+        (name) => resolveRoutingName(name, indexes)?.variantProvenance,
+      ),
+    ).toEqual([
+      "legacy_inferred",
+      "legacy_inferred",
+      "legacy_inferred",
+    ]);
+  });
+
+  it("lets an exact slug win when another family declares the same key as an alias", () => {
+    const collidingFamilies = structuredClone(FAMILIES);
+    collidingFamilies[0].aliases.push("gpt-5-2");
+    const collisionSnapshot: PublicDataSnapshot = {
+      meta: {
+        version: 2,
+        generatedAt: "2026-05-28T00:00:00.000Z",
+        sourceRepo: "mistakeknot/agmodb",
+        sourceCommit: "collision-test",
+        modelSyncMaxAt: null,
+        counts: {
+          models: 0,
+          benchmarks: 0,
+          metrics: 0,
+          metricValues: 0,
+          predictedCells: 0,
+        },
+      },
+      metrics: [],
+      benchmarks: [],
+      models: [],
+      modelFamilies: collidingFamilies,
+    };
+
+    const resolution = resolveRoutingName(
+      "gpt-5-2",
+      buildSnapshotIndexes(collisionSnapshot),
+    );
+
+    expect(resolution?.family.routingName).toBe("gpt-5.2");
+    expect(resolution?.selection.kind).toBe("exact-slug");
+    expect(resolution?.resolvedSlug).toBe("gpt-5-2");
+  });
+});
+
+describe("resolveRoutingName — authoritative v3 variant routing", () => {
+  const indexes = makeV3Indexes();
+
+  it("selects the declared primary for a bare family without inferring a variant", () => {
+    const resolution = resolveRoutingName("opus", indexes);
+    expect(resolution?.catalog).toEqual({
+      digest: "a".repeat(64),
+      generatedAt: "2026-08-06T12:30:00.000Z",
+      sourceRepo: "mistakeknot/agmodb",
+      sourceCommit: "fixture-v3",
+      snapshotVersion: 3,
+    });
+    expect(resolution?.selection).toMatchObject({
+      kind: "family-primary",
+      requiresExactSlug: false,
+      candidateSlugs: ["claude-opus-4-6"],
+      route: {
+        id: "agmodb:model:claude-opus-4-6",
+        identityLevel: "model",
+        modelSlug: "claude-opus-4-6",
+        modelName: "claude-opus-4-6",
+        provider: { name: "Anthropic", slug: "anthropic" },
+        variant: null,
+        harness: null,
+        identityCaveat:
+          "This route identifies a model variant only; benchmark harness and deployment configuration remain unresolved.",
+      },
+    });
+    expect(resolution?.variant).toBeNull();
+    expect(resolution?.variantProvenance).toBe("unknown");
+  });
+
+  it("lets an exact adaptive slug win without inventing an adaptive qualifier", () => {
+    const resolution = resolveRoutingName(
+      "claude-opus-4-6-adaptive",
+      indexes,
+    );
+    expect(resolution?.selection.kind).toBe("exact-slug");
+    expect(resolution?.selection.route?.modelSlug).toBe(
+      "claude-opus-4-6-adaptive",
+    );
+    expect(resolution?.selection.route?.variant).toEqual({
+      reasoning: "reasoning",
+      effort: null,
+      snapshot: null,
+    });
+    expect(resolution?.variantProvenance).toBe("snapshot");
+    expect(resolveRoutingName("opus adaptive", indexes)).toBeNull();
+  });
+
+  it("filters authoritative effort descriptors for gpt-5.2 medium", () => {
+    const resolution = resolveRoutingName("gpt-5.2 medium", indexes);
+    expect(resolution?.selection).toMatchObject({
+      kind: "qualified-variant",
+      requiresExactSlug: false,
+      candidateSlugs: ["gpt-5-2-medium"],
+      route: {
+        modelSlug: "gpt-5-2-medium",
+        variant: {
+          reasoning: "reasoning",
+          effort: "Medium Effort",
+          snapshot: null,
+        },
+      },
+    });
+  });
+
+  it("uses an explicit alias target for gpt-5.4-pro", () => {
+    const resolution = resolveRoutingName("gpt-5.4-pro", indexes);
+    expect(resolution?.selection).toMatchObject({
+      kind: "targeted-alias",
+      requiresExactSlug: false,
+      candidateSlugs: ["gpt-5-4-pro"],
+      route: { modelSlug: "gpt-5-4-pro" },
+    });
+  });
+
+  it("returns every family member and requires an exact slug when descriptors are ambiguous", () => {
+    const resolution = resolveRoutingName("opus reasoning", indexes);
+    expect(resolution?.selection).toEqual({
+      kind: "ambiguous",
+      route: null,
+      requiresExactSlug: true,
+      candidateSlugs: [
+        "claude-opus-4-6-adaptive",
+        "claude-opus-4-5-thinking",
+      ],
+    });
+    expect(resolution?.resolvedSlug).toBeNull();
+    expect(resolution?.variant).toBeNull();
+    expect(resolution?.members.map((member) => member.slug)).toEqual([
+      "claude-opus-4-6",
+      "claude-opus-4-6-adaptive",
+      "claude-opus-4-5-thinking",
+    ]);
+    expect(resolution?.members.map((member) => member.route?.modelSlug)).toEqual([
+      "claude-opus-4-6",
+      "claude-opus-4-6-adaptive",
+      "claude-opus-4-5-thinking",
+    ]);
+  });
+
+  it("returns an explicit known-family no-match when no authoritative descriptor matches", () => {
+    const resolution = resolveRoutingName("opus non-reasoning", indexes);
+
+    expect(resolution?.selection).toEqual({
+      kind: "no-match",
+      route: null,
+      requiresExactSlug: false,
+      candidateSlugs: [],
+    });
+    expect(resolution?.resolvedSlug).toBeNull();
+    expect(resolution?.variant).toBeNull();
+    expect(resolution?.variantProvenance).toBe("unknown");
+    expect(resolution?.requestedVariant).toBe("non-reasoning");
+    expect(resolution?.members.map((member) => member.slug)).toEqual([
+      "claude-opus-4-6",
+      "claude-opus-4-6-adaptive",
+      "claude-opus-4-5-thinking",
+    ]);
   });
 });
