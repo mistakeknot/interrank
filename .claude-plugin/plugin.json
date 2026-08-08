@@ -1,6 +1,6 @@
 {
   "name": "interrank",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "description": "Snapshot-backed model/benchmark ranking MCP server for AgMoDB",
   "author": {
     "name": "mistakeknot"
