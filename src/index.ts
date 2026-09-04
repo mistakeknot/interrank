@@ -178,7 +178,7 @@ async function main() {
 
   const server = new McpServer({
     name: "interrank",
-    version: "0.3.4",
+    version: "0.3.6",
   });
 
   server.registerTool(
