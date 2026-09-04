@@ -939,6 +939,17 @@ async function main() {
 
       const family = resolution.family;
 
+      if (resolution.selection.kind === "blocked-alias") {
+        throw new Error(
+          `Routing name "${name}" is cataloged but is not a runnable model route. Use "${family.routingName}" with one of its supported effort settings instead.`,
+        );
+      }
+      if (resolution.selection.kind === "unsupported-effort") {
+        throw new Error(
+          `Unsupported effort for "${family.routingName}": "${resolution.effort}". Supported efforts: ${(family.supportedEfforts ?? []).join(", ")}.`,
+        );
+      }
+
       // Use only the resolver's selected route. Ambiguous v3 queries must not
       // silently fall back to a primary or first member.
       let primaryModel = resolution.selection.route
@@ -1012,6 +1023,19 @@ async function main() {
           memberSlugs: family.slugs,
           aliases: family.aliases,
           aliasTargets: family.aliasTargets ?? {},
+          routeContract: family.runnableModel
+            ? {
+                model: family.runnableModel,
+                supportedEfforts: family.supportedEfforts ?? [],
+                serviceTiers: family.serviceTiers ?? [],
+                minimumCodexVersion: family.minimumCodexVersion ?? null,
+                contextWindow: family.contextWindow ?? null,
+                maxOutputTokens: family.maxOutputTokens ?? null,
+                capabilities: family.capabilities ?? null,
+                tools: family.tools ?? [],
+                pricing: family.pricing ?? null,
+              }
+            : null,
           members: resolution.members.map((member) => ({
             slug: member.slug,
             present: member.model !== null,

@@ -238,6 +238,21 @@ describe("model family index", () => {
       targetSlug: "model-a",
     });
   });
+
+  it("indexes blocked routing spellings without exposing them as family aliases", () => {
+    const blocked = structuredClone(SNAPSHOT);
+    blocked.modelFamilies![0].blockedRoutingAliases = [
+      "model-a-non-reasoning",
+    ];
+
+    const indexes = buildSnapshotIndexes(blocked);
+
+    expect(indexes.familyByName.has("model-a-non-reasoning")).toBe(false);
+    expect(
+      indexes.blockedRoutingAliasByName.get("model-a-non-reasoning")
+        ?.routingName,
+    ).toBe("tier-a");
+  });
 });
 
 describe("cost efficiency", () => {

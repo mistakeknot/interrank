@@ -83,6 +83,8 @@ export type RoutingSelection = {
     | "qualified-variant"
     | "ambiguous"
     | "no-match"
+    | "unsupported-effort"
+    | "blocked-alias"
     | "legacy-qualified-variant"
     | "legacy-fallback";
   route: DecisionRoute | null;
@@ -358,6 +360,24 @@ export function resolveRoutingName(
 ): RoutingResolution | null {
   const normalized = name.trim().toLowerCase();
 
+  // Catalog spellings listed here are observations, not runnable variants.
+  // Fail closed before suffix parsing can reinterpret one as a qualifier.
+  const blockedFamily = indexes.blockedRoutingAliasByName.get(normalized);
+  if (blockedFamily) {
+    return makeResolution(
+      blockedFamily,
+      indexes,
+      {
+        kind: "blocked-alias",
+        route: null,
+        requiresExactSlug: false,
+        candidateSlugs: [],
+      },
+      null,
+      null,
+    );
+  }
+
   // 1. An exact member slug always wins over aliases and qualifiers.
   const exactFamily = indexes.familyBySlug.get(normalized);
   const matchedSlug = exactFamily?.slugs.find(
@@ -426,6 +446,37 @@ export function resolveRoutingName(
   if (!base || (!variant && !effort)) return null;
   const family = indexes.familyByName.get(base);
   if (!family) return null;
+
+  if (effort && family.supportedEfforts) {
+    const supportedEfforts: readonly string[] = family.supportedEfforts;
+    if (!supportedEfforts.includes(effort)) {
+      return makeResolution(
+        family,
+        indexes,
+        {
+          kind: "unsupported-effort",
+          route: null,
+          requiresExactSlug: false,
+          candidateSlugs: [],
+        },
+        variant,
+        effort,
+      );
+    }
+
+    // A supported reasoning effort configures the single runnable endpoint;
+    // it is not a distinct catalog model variant.
+    if (!variant) {
+      return selectSlug(
+        family,
+        indexes,
+        family.primarySlug,
+        "family-primary",
+        null,
+        effort,
+      );
+    }
+  }
 
   // Snapshot v3 owns variant truth. Do not infer from slugs or silently fall
   // back when the authoritative descriptors return zero or multiple matches.

@@ -251,6 +251,73 @@ function makeV3Indexes() {
   return buildSnapshotIndexes(snapshot);
 }
 
+function makeAstraV3Indexes() {
+  const snapshot: PublicDataSnapshot = {
+    meta: {
+      version: 3,
+      contractVersion: "agmodb.decision-packet.v1",
+      policyVersion: "agmodb.recommendation.v1",
+      catalogDigest: "b".repeat(64),
+      generatedAt: "2026-09-04T08:15:00.000Z",
+      sourceRepo: "mistakeknot/agmodb",
+      sourceCommit: "astra-fixture",
+      modelSyncMaxAt: "2026-09-04T08:00:00.000Z",
+      counts: {
+        models: 1,
+        benchmarks: 0,
+        metrics: 0,
+        metricValues: 0,
+        predictedCells: 0,
+      },
+    },
+    metrics: [],
+    benchmarks: [],
+    models: [model(20, "gpt-6-astra", undefined)],
+    modelFamilies: [
+      {
+        routingName: "gpt-6-astra",
+        displayName: "GPT-6 Astra",
+        provider: "openai",
+        primarySlug: "gpt-6-astra",
+        slugs: ["gpt-6-astra", "openai-gpt-6-astra"],
+        aliases: ["astra"],
+        costTier: "premium",
+        strengths: ["reasoning", "coding", "agentic", "research"],
+        runnableModel: "gpt-6-astra",
+        supportedEfforts: ["low", "medium", "high", "xhigh", "max"],
+        serviceTiers: ["standard"],
+        minimumCodexVersion: "0.153.1",
+        contextWindow: 1_050_000,
+        maxOutputTokens: 128_000,
+        capabilities: {
+          streaming: true,
+          functionCalling: true,
+          structuredOutputs: true,
+        },
+        tools: ["web_search", "apply_patch", "mcp"],
+        pricing: {
+          currency: "USD",
+          unit: "per_million_tokens",
+          standard: {
+            input: 10,
+            cachedInput: 1,
+            cacheWrite: 12.5,
+            output: 50,
+          },
+          longContext: {
+            thresholdInputTokens: 272_000,
+            inputAndCacheMultiplier: 2,
+            outputMultiplier: 1.5,
+            appliesToEntireRequest: true,
+          },
+        },
+        blockedRoutingAliases: ["gpt-6-astra-non-reasoning"],
+      },
+    ],
+  };
+  return buildSnapshotIndexes(snapshot);
+}
+
 describe("classifySlugVariant", () => {
   it("classifies non-reasoning before reasoning (substring trap)", () => {
     expect(classifySlugVariant("claude-opus-4-7-non-reasoning")).toBe(
@@ -794,5 +861,35 @@ describe("resolveRoutingName — authoritative v3 variant routing", () => {
       "claude-opus-4-6-adaptive",
       "claude-opus-4-5-thinking",
     ]);
+  });
+});
+
+describe("resolveRoutingName — Astra route contract", () => {
+  const indexes = makeAstraV3Indexes();
+
+  it("forwards a supported effort through the single runnable Astra route", () => {
+    const resolution = resolveRoutingName("astra xhigh", indexes);
+
+    expect(resolution?.selection.kind).toBe("family-primary");
+    expect(resolution?.resolvedSlug).toBe("gpt-6-astra");
+    expect(resolution?.effort).toBe("xhigh");
+    expect(resolution?.family).toMatchObject({
+      runnableModel: "gpt-6-astra",
+      supportedEfforts: ["low", "medium", "high", "xhigh", "max"],
+      serviceTiers: ["standard"],
+      minimumCodexVersion: "0.153.1",
+      contextWindow: 1_050_000,
+      maxOutputTokens: 128_000,
+    });
+  });
+
+  it("fails closed for unsupported effort and the ingested non-reasoning spelling", () => {
+    expect(resolveRoutingName("astra minimal", indexes)?.selection.kind).toBe(
+      "unsupported-effort",
+    );
+    expect(
+      resolveRoutingName("gpt-6-astra-non-reasoning", indexes)?.selection
+        .kind,
+    ).toBe("blocked-alias");
   });
 });

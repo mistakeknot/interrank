@@ -35,6 +35,8 @@ export type SnapshotIndexes = {
     string,
     { family: SnapshotModelFamily; targetSlug: string }
   >;
+  /** Known catalog spellings that must fail closed instead of becoming routes. */
+  blockedRoutingAliasByName: Map<string, SnapshotModelFamily>;
   /** Snapshot provenance returned with routing selections. */
   catalog: {
     digest: string | null;
@@ -112,29 +114,41 @@ export function assertSnapshotShape(
       for (const [index, value] of snapshot.modelFamilies.entries()) {
         if (!value || typeof value !== "object") continue;
         const family = value as Record<string, unknown>;
-        if (family.aliasTargets === undefined) continue;
-        if (
-          !family.aliasTargets ||
-          typeof family.aliasTargets !== "object" ||
-          Array.isArray(family.aliasTargets)
-        ) {
-          throw new Error(
-            `Snapshot v3 family ${index} has invalid aliasTargets`,
-          );
-        }
         const slugs = new Set(
           Array.isArray(family.slugs)
             ? family.slugs.filter((slug): slug is string => typeof slug === "string")
             : [],
         );
-        for (const target of Object.values(
-          family.aliasTargets as Record<string, unknown>,
-        )) {
-          if (typeof target !== "string" || !slugs.has(target)) {
+        if (family.aliasTargets !== undefined) {
+          if (
+            !family.aliasTargets ||
+            typeof family.aliasTargets !== "object" ||
+            Array.isArray(family.aliasTargets)
+          ) {
             throw new Error(
-              `Snapshot v3 family ${index} alias target is not a declared member`,
+              `Snapshot v3 family ${index} has invalid aliasTargets`,
             );
           }
+          for (const target of Object.values(
+            family.aliasTargets as Record<string, unknown>,
+          )) {
+            if (typeof target !== "string" || !slugs.has(target)) {
+              throw new Error(
+                `Snapshot v3 family ${index} alias target is not a declared member`,
+              );
+            }
+          }
+        }
+        if (
+          family.blockedRoutingAliases !== undefined &&
+          (!Array.isArray(family.blockedRoutingAliases) ||
+            family.blockedRoutingAliases.some(
+              (alias) => typeof alias !== "string" || alias.trim() === "",
+            ))
+        ) {
+          throw new Error(
+            `Snapshot v3 family ${index} has invalid blockedRoutingAliases`,
+          );
         }
       }
     }
@@ -249,6 +263,7 @@ export function buildSnapshotIndexes(snapshot: PublicDataSnapshot): SnapshotInde
     string,
     { family: SnapshotModelFamily; targetSlug: string }
   >();
+  const blockedRoutingAliasByName = new Map<string, SnapshotModelFamily>();
   if (Array.isArray(snapshot.modelFamilies)) {
     for (const family of snapshot.modelFamilies) {
       // Index by routing name (primary lookup)
@@ -261,6 +276,9 @@ export function buildSnapshotIndexes(snapshot: PublicDataSnapshot): SnapshotInde
         family.aliasTargets ?? {},
       )) {
         targetedAliasByName.set(alias.toLowerCase(), { family, targetSlug });
+      }
+      for (const alias of family.blockedRoutingAliases ?? []) {
+        blockedRoutingAliasByName.set(alias.toLowerCase(), family);
       }
       // Index by member slugs (so a full slug also resolves)
       for (const slug of family.slugs) {
@@ -282,6 +300,7 @@ export function buildSnapshotIndexes(snapshot: PublicDataSnapshot): SnapshotInde
     familyByName,
     familyBySlug,
     targetedAliasByName,
+    blockedRoutingAliasByName,
     catalog: {
       digest: snapshot.meta.catalogDigest ?? null,
       generatedAt: snapshot.meta.generatedAt,

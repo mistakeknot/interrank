@@ -83,6 +83,37 @@ export type SnapshotModelFamily = {
   aliasTargets?: Record<string, string>;
   costTier: "budget" | "mid" | "premium";
   strengths: string[];
+  /** Exact provider model accepted by an agent route, when this family is runnable. */
+  runnableModel?: string;
+  supportedEfforts?: Array<"low" | "medium" | "high" | "xhigh" | "max">;
+  serviceTiers?: Array<"standard" | "fast" | "flex" | "batch">;
+  minimumCodexVersion?: string;
+  contextWindow?: number;
+  maxOutputTokens?: number;
+  capabilities?: {
+    streaming: boolean;
+    functionCalling: boolean;
+    structuredOutputs: boolean;
+  };
+  tools?: string[];
+  pricing?: {
+    currency: "USD";
+    unit: "per_million_tokens";
+    standard: {
+      input: number;
+      cachedInput: number;
+      cacheWrite: number;
+      output: number;
+    };
+    longContext?: {
+      thresholdInputTokens: number;
+      inputAndCacheMultiplier: number;
+      outputMultiplier: number;
+      appliesToEntireRequest: boolean;
+    };
+  };
+  /** Catalog spellings that must never resolve to runnable model routes. */
+  blockedRoutingAliases?: string[];
 };
 
 /** Exact route identity shared with AgMoDB Decision Packet v1. */
